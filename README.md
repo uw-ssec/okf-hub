@@ -10,15 +10,13 @@ Unlike the embedded `okf hub serve`, this hub persists data across restarts, enf
 
 ## Client requirements
 
-Use an `okf` build from the [uw-ssec fork](https://github.com/uw-ssec/okf-agent-memory) that includes these branches:
+Use an `okf` build from `main` of the [uw-ssec fork](https://github.com/uw-ssec/okf-agent-memory). It has what the hub relies on:
 
-| Branch | Why it matters |
-|---|---|
-| `fix/persist-sync-state` | Without it, only the first push to a vault succeeds and `sync` reverts local edits. |
-| `fix/merge-index-on-sync` | Without it, creating different concepts in the same folder on two devices collides on `index.md`. |
-| `feat/hub-credentials-env` | Reads the vault password and Secret Key from `OKF_HUB_PASSWORD` / `OKF_HUB_SECRET_KEY` instead of visible flags. |
+- Sync state that persists between runs. Without it, only the first push to a vault succeeds and `sync` reverts local edits.
+- Per-listing `index.md` merging. Without it, creating different concepts in the same folder on two devices collides.
+- The vault password and Secret Key read from `OKF_HUB_PASSWORD` / `OKF_HUB_SECRET_KEY` instead of visible flags.
 
-The commit in `engine/FORK_COMMIT` (branch `perf/bundle-cache`) includes the first and third, plus the Wasm engine.
+The hub's own engine is built from the fork commit in `engine/FORK_COMMIT`.
 
 ## Using it
 
@@ -31,7 +29,7 @@ okf hub init-vault -hub <hub-url> knowledge
 okf hub sync -hub <hub-url> knowledge
 ```
 
-Add `.okf-sync-state.json` to the bundle repo's `.gitignore`; it is per-device.
+Add `.okf/` to the bundle repo's `.gitignore`; it holds per-device sync state.
 
 ## Development
 
