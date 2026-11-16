@@ -61,7 +61,7 @@ HEAD1="$(curl -s "${AUTH[@]}" "$HUB_URL/api/v1/vaults/$VAULT/head" | python3 -I 
 echo "== Machine B: fresh pull"
 mkdir -p "$WORK/b/knowledge" && cp "$WORK/a/knowledge/.okf-vault.json" "$WORK/b/knowledge/"
 hub pull "$WORK/b/knowledge" >/dev/null && ok "pull into B" || bad "pull into B"
-diff -rq -x .okf-vault.json -x .okf-sync-state.json "$WORK/a/knowledge" "$WORK/b/knowledge" >/dev/null \
+diff -rq -x .okf-vault.json -x .okf "$WORK/a/knowledge" "$WORK/b/knowledge" >/dev/null \
   && ok "B is byte-identical to A" || bad "B is byte-identical to A"
 
 echo "== Disjoint edits merge"
@@ -83,8 +83,8 @@ hub sync -message "B conflict" "$WORK/b/knowledge" >/dev/null || true
 B_HAS_BOTH="no"
 grep -rqs conflict-from-A "$WORK/b/knowledge" && grep -rqs conflict-from-B "$WORK/b/knowledge" && B_HAS_BOTH="yes"
 expect "B keeps both versions of the conflicting edit" "$B_HAS_BOTH" yes
-find "$WORK/b/knowledge" -name '*.conflict-local.md' | grep -q . \
-  && ok "conflict copy written as *.conflict-local.md" || bad "conflict copy written as *.conflict-local.md"
+find "$WORK/b/knowledge" -name '*.conflict-local*.md' | grep -q . \
+  && ok "conflict copy written as *.conflict-local*.md" || bad "conflict copy written as *.conflict-local*.md"
 
 echo "== Stale write gets 409"
 CURRENT="$(curl -s "${AUTH[@]}" "$HUB_URL/api/v1/vaults/$VAULT/head" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["head_commit"])')"
