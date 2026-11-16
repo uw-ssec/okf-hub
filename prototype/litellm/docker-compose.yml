@@ -1,0 +1,82 @@
+# Prototype: SSEC's LiteLLM fork as an MCP gateway in front of okf-hub.
+# Local only. The tokens below are throwaway defaults for a stack that never
+# leaves this machine; override them in .env if you expose any port.
+name: litellm-okf-prototype
+
+services:
+  okf-hub:
+    build:
+      context: ../..
+      dockerfile: prototype/litellm/Dockerfile.hub
+    environment:
+      HUB_TOKEN: ${HUB_TOKEN:-prototype-hub-token}
+      MCP_TOKEN: ${OKF_MCP_TOKEN:-prototype-mcp-token}
+      PUBLIC_URL: http://localhost:8787
+    volumes:
+      - hub_state:/state
+    # LiteLLM shares this service's network namespace (see below), so its port
+    # is published here too.
+    ports:
+      - "127.0.0.1:8787:8787"
+      - "127.0.0.1:4000:4000"
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /state/seeded && curl -fs http://127.0.0.1:8787/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: llmproxy
+      POSTGRES_PASSWORD: prototype-db-password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d litellm -U llmproxy"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  litellm:
+    # The image the fork's CI published for sso-enabled at 3867628. It is
+    # amd64 only, so it runs under emulation on Apple Silicon.
+    # `docker compose build litellm` builds from source instead; that compiles
+    # the fork's Rust core and needs well over 8 GB of Docker memory.
+    image: ${LITELLM_IMAGE:-ghcr.io/uw-ssec/llmoxie-litellm-fork:sha-386762834d2c9beea86b87a97d2be99c8885634d}
+    platform: linux/amd64
+    pull_policy: missing
+    build:
+      context: https://github.com/uw-ssec/llmoxie-litellm.git#${LITELLM_REF:-sso-enabled}
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      DATABASE_URL: postgresql://llmproxy:prototype-db-password@db:5432/litellm
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-prototype-master-key}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:-sk-prototype-salt-key}
+      OKF_MCP_TOKEN: ${OKF_MCP_TOKEN:-prototype-mcp-token}
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+    # The hub binds MCP tokens to its public URL, which must be HTTPS or
+    # loopback. Sharing the hub's network namespace lets LiteLLM reach it at
+    # http://localhost:8787 without TLS. A real deployment uses the hub's
+    # HTTPS URL and separate networks.
+    network_mode: service:okf-hub
+    depends_on:
+      db:
+        condition: service_healthy
+      okf-hub:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+volumes:
+  hub_state:
+  postgres_data:

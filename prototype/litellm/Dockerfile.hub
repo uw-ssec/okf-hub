@@ -1,0 +1,33 @@
+# okf-hub for the LiteLLM prototype: the Go okf engine built to Wasm from the
+# uw-ssec fork, served by `wrangler dev` (local workerd, no Cloudflare account).
+# Build context is the repository root.
+
+FROM golang:1.26-bookworm AS engine
+WORKDIR /fork
+COPY engine/FORK_COMMIT /tmp/FORK_COMMIT
+RUN git clone -q https://github.com/uw-ssec/okf-agent-memory.git . \
+ && git -c advice.detachedHead=false checkout -q "$(tr -d '[:space:]' < /tmp/FORK_COMMIT)"
+RUN mkdir /out \
+ && GOOS=js GOARCH=wasm go build -trimpath -ldflags="-s -w" -o /out/okf-engine.wasm ./cmd/okf-wasm-engine \
+ && go build -o /out/derivekey ./cmd/okf-wasm-engine/derivekey \
+ && go build -o /out/okf ./cmd/okf \
+ && cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" /out/wasm_exec.js \
+ && cp pkg/okf/schemas/tools.json /out/okf-tools.json \
+ && cp -R knowledge /out/sample-bundle
+
+FROM node:24-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY tsconfig.json wrangler.jsonc worker-configuration.d.ts ./
+COPY src ./src
+COPY --from=engine /out/okf-engine.wasm /out/wasm_exec.js ./src/engine/
+COPY --from=engine /out/okf-tools.json ./src/okf-tools.json
+COPY --from=engine /out/okf /out/derivekey /usr/local/bin/
+COPY --from=engine /out/sample-bundle /opt/sample-bundle
+COPY prototype/litellm/hub-entrypoint.sh /usr/local/bin/hub-entrypoint.sh
+ENV WRANGLER_SEND_METRICS=false
+EXPOSE 8787
+ENTRYPOINT ["bash", "/usr/local/bin/hub-entrypoint.sh"]

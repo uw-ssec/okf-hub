@@ -1,0 +1,11 @@
+# LiteLLM proxy config for the prototype: no models, one MCP server.
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+mcp_servers:
+  okf:
+    url: http://localhost:8787/mcp
+    transport: http
+    auth_type: bearer_token
+    auth_value: os.environ/OKF_MCP_TOKEN
+    description: OKF knowledge bundle served by okf-hub
