@@ -1,0 +1,26 @@
+{
+  "name": "okf-hub",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "types": "wrangler types",
+    "typecheck": "wrangler types && tsc --noEmit",
+    "test:e2e": "bash test/e2e.sh",
+    "deploy": "bash scripts/build-engine.sh && wrangler deploy",
+    "build:engine": "bash scripts/build-engine.sh",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.3",
+    "wrangler": "4.148.0"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^1.2.3",
+    "@modelcontextprotocol/server": "2.0.0",
+    "agents": "^0.27.0",
+    "memfs": "^4.80.0",
+    "zod": "^4.6.5"
+  }
+}

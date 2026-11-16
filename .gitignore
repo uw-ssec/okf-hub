@@ -1,0 +1,11 @@
+node_modules/
+.wrangler/
+.dev.vars*
+.env*
+.DS_Store
+test/.work/
+.superpowers/
+.work/
+src/engine/okf-engine.wasm
+src/engine/wasm_exec.js
+src/okf-tools.json

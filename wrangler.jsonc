@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "okf-hub",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "vars": {
+    "MCP_VAULT_ID": "v_00000000000000000000000000000000",
+    "PUBLIC_URL": "https://okf-hub.example.workers.dev",
+    "ALLOWED_GITHUB_USER_ID": "0",
+    "GITHUB_CLIENT_ID": "REPLACE_WITH_GITHUB_OAUTH_CLIENT_ID"
+  },
+  "observability": { "enabled": true },
+  "r2_buckets": [{ "binding": "BLOBS", "bucket_name": "okf-hub" }],
+  // OAuth grants, clients and tokens (hashed) for @cloudflare/workers-oauth-provider.
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "REPLACE_WITH_KV_NAMESPACE_ID" }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "VAULT_HEAD", "class_name": "VaultHead" },
+      { "name": "VAULT_ENGINE", "class_name": "VaultEngine" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["VaultHead"] },
+    { "tag": "v2", "new_sqlite_classes": ["VaultEngine"] }
+  ]
+  // Secrets (set with `wrangler secret put`, never in this file):
+  //   HUB_TOKEN     — bearer token every hub API request must present
+  //   MCP_TOKEN     — legacy bearer token for /mcp, accepted until every client uses OAuth
+  //   VAULT_KEY_HEX — Argon2id-derived vault key for MCP_VAULT_ID (hex)
+  //   GITHUB_CLIENT_SECRET — GitHub OAuth app secret (sign-in for /authorize and /grants)
+  //   COOKIE_SECRET — HMAC key for the /grants session cookie (64 hex)
+}
