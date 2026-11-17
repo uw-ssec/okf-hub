@@ -30,4 +30,6 @@
   //   VAULT_KEY_HEX — Argon2id-derived vault key for MCP_VAULT_ID (hex)
   //   GITHUB_CLIENT_SECRET — GitHub OAuth app secret (sign-in for /authorize and /grants)
   //   COOKIE_SECRET — HMAC key for the /grants session cookie (64 hex)
+  //   VAULT_MASTER_KEY_HEX — OIDC bundles only: every bundle vault's key derives from it (64 hex)
+  // OIDC bundles (README: Bundles for an OIDC provider's callers) are off unless OIDC_ISSUER is set.
 }

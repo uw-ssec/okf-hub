@@ -4,7 +4,9 @@ import { handleAuthorize, handleCallback } from "./authorize";
 import { handleGrants } from "./grants";
 import { routeHub } from "./hub";
 import { handleMcp } from "./mcp";
-import { LEGACY_PROPS, SCOPES } from "./policy";
+import { LEGACY_PROPS, SCOPES, type GrantProps } from "./policy";
+import { oidcConfig, resolveCaller } from "./oidc";
+import { handleSnapshot } from "./snapshot";
 
 const DAY = 86400;
 
@@ -15,6 +17,7 @@ export async function routeDefault(request: Request, env: Env): Promise<Response
   if (pathname === "/authorize") return handleAuthorize(request, env);
   if (pathname === "/callback") return handleCallback(request, env);
   if (pathname === "/grants" || pathname === "/grants/revoke" || pathname === "/callback/grants") return handleGrants(request, env);
+  if (pathname === "/v1/snapshot") return handleSnapshot(request, env);
   return routeHub(request, env);
 }
 
@@ -41,7 +44,14 @@ export function buildProvider(publicUrl: string): OAuthProvider<Env> {
     refreshTokenIdleTTL: 90 * DAY,
     // Transitional: the phase 1 static token keeps working as a full, unrestricted grant
     // until every client has moved to OAuth (spec: Migration from MCP_TOKEN).
-    resolveExternalToken: async ({ token, env }) =>
-      (await secretMatches(token, (env as Env).MCP_TOKEN)) ? { props: LEGACY_PROPS, audience: resource } : null,
+    // With OIDC configured, a provider's access token for this hub is accepted too (src/oidc.ts).
+    resolveExternalToken: async ({ token, env }) => {
+      if (await secretMatches(token, (env as Env).MCP_TOKEN)) return { props: LEGACY_PROPS, audience: resource };
+      const config = oidcConfig(env as unknown as Record<string, unknown>);
+      const caller = config ? await resolveCaller(token, config) : null;
+      if (!caller) return null;
+      const props: GrantProps = { clientName: caller.clientName, access: "full", exclude: [], bundles: caller.grants };
+      return { props, audience: resource };
+    },
   });
 }

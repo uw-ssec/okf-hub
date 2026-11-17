@@ -8,6 +8,14 @@ declare global {
     HUB_TOKEN: string;
     MCP_TOKEN: string;
     VAULT_KEY_HEX: string;
+    /** OIDC bundles only (src/bundles.ts): the key every bundle vault's key is derived from (64 hex). */
+    VAULT_MASTER_KEY_HEX?: string;
+    /** OIDC sign-in (src/oidc.ts); off unless OIDC_ISSUER is set. */
+    OIDC_ISSUER?: string;
+    OIDC_JWKS_URL?: string;
+    OIDC_AUDIENCE?: string;
+    OIDC_ACTOR_CLAIM?: string;
+    OIDC_GRANTS?: string;
     GITHUB_CLIENT_SECRET: string;
     COOKIE_SECRET: string;
     /** Tests only: a loopback fake GitHub. Ignored for any other host. */

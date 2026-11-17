@@ -3,10 +3,13 @@
  * may call and which folders it may never read, write, or see links into.
  * Pure functions only, so every rule is unit-tested.
  */
+import { parseGrants, type BundleGrant } from "./bundles";
+
 export type Access = "full" | "read";
-export type Policy = { clientName: string; access: Access; exclude: string[] };
-/** What a grant stores in its encrypted props (and the legacy token resolves to). */
-export type GrantProps = { githubUserId?: number; clientId?: string; clientName: string; access: Access; exclude: string[] };
+/** `bundles` is set for OIDC callers only: then the request picks a bundle and its grant decides the access. */
+export type Policy = { clientName: string; access: Access; exclude: string[]; bundles?: BundleGrant[] };
+/** What a grant stores in its encrypted props (and the legacy token and OIDC tokens resolve to). */
+export type GrantProps = { githubUserId?: number; clientId?: string; clientName: string; access: Access; exclude: string[]; bundles?: BundleGrant[] };
 
 export const LEGACY_PROPS: GrantProps = { clientName: "legacy-token", access: "full", exclude: [] };
 export const READ_TOOLS: ReadonlySet<string> = new Set(["okf_search", "okf_show", "okf_validate"]);
@@ -140,11 +143,19 @@ export function stripExcludedLinks(fromId: string, text: string, exclude: readon
 /** The policy a token carries. Missing access means read-only; a malformed exclusion list is an error. */
 export function policyFromProps(props: unknown): Policy {
   const p = (props ?? {}) as Partial<GrantProps>;
-  return {
+  const policy: Policy = {
     clientName: sanitizeActor(p.clientName),
     access: p.access === "full" ? "full" : "read",
     exclude: Array.isArray(p.exclude) ? p.exclude.map((entry) => normalizePrefix(String(entry))) : [],
   };
+  if (p.bundles !== undefined) {
+    try {
+      policy.bundles = parseGrants(p.bundles);
+    } catch (err) {
+      throw new PolicyError((err as Error).message);
+    }
+  }
+  return policy;
 }
 
 /** A client name made safe for a one-line commit message. Client names are self-asserted. */
