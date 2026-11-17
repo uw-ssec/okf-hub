@@ -1,10 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 
-export type HeadState = { head_commit: string; updated_at: string };
-
-export type CommitResult =
-  | { ok: true; head: string; previous: string; seq: number; accepted_at: string }
-  | { ok: false; current_head: string };
+import type { CommitResult, HeadState } from "./stores";
 
 /**
  * One instance per vault (addressed by vault ID). Holds the vault's head

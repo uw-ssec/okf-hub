@@ -1,0 +1,13 @@
+# Backing services for the integration tests: `npm run test:integration`.
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: test
+    ports:
+      - "55432:5432"
+  azurite: # host port 10010: 10000 is often taken by other local stacks
+    image: mcr.microsoft.com/azure-storage/azurite
+    command: azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
+    ports:
+      - "10010:10000"
