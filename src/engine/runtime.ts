@@ -1,6 +1,7 @@
 import { Volume, createFsFromVolume } from "memfs";
 import "./wasm_exec.js";
 import engineWasm from "./okf-engine.wasm";
+import { serialQueue } from "../serial";
 
 export type HubFetch = (method: string, path: string, body: Uint8Array | null) => Promise<{ status: number; body: Uint8Array }>;
 
@@ -21,6 +22,21 @@ export const BUNDLE_DIR = "/vault/knowledge";
 const volume = new Volume();
 let started: Promise<void> | undefined;
 let exited = false;
+
+/**
+ * The Go runtime, its filesystem and its one open vault are per isolate, and Durable Objects for
+ * different vaults can share an isolate. So the lock and the record of which vault is loaded live
+ * here, not on the object: every use of the engine runs under `engineExclusive`, and a vault that is
+ * not the loaded one is reloaded from scratch before it is touched.
+ */
+export const engineExclusive = serialQueue();
+let loadedVault = "";
+export function loadedVaultId(): string {
+  return loadedVault;
+}
+export function setLoadedVault(vaultId: string): void {
+  loadedVault = vaultId;
+}
 
 /** True once the Go runtime has exited; every later export call would fail. */
 export function engineExited(): boolean {
@@ -93,6 +109,23 @@ export function startEngine(): Promise<void> {
 
 /** Empty the in-memory filesystem and recreate the bundle directory. */
 export function resetVolume(): void {
+  loadedVault = "";
   volume.reset();
   volume.mkdirSync(BUNDLE_DIR, { recursive: true });
+}
+
+/** Every file of the loaded bundle as text, by path relative to the bundle root. Skips dot folders (sync state). */
+export function readBundleFiles(): Record<string, string> {
+  const files: Record<string, string> = {};
+  const walk = (dir: string, rel: string) => {
+    for (const name of volume.readdirSync(dir) as string[]) {
+      if (name.startsWith(".")) continue;
+      const path = `${dir}/${name}`;
+      const relPath = rel ? `${rel}/${name}` : name;
+      if (volume.statSync(path).isDirectory()) walk(path, relPath);
+      else files[relPath] = volume.readFileSync(path, "utf8") as string;
+    }
+  };
+  if (volume.existsSync(BUNDLE_DIR)) walk(BUNDLE_DIR, "");
+  return files;
 }

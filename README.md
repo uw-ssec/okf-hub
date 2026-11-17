@@ -47,6 +47,7 @@ Integration tests run the real `okf` CLI against a throwaway vault built from ok
 - `bash test/mcp-e2e.sh` (MCP tools, including parity with local `okf mcp`)
 - `bash test/mcp-oauth.sh` (OAuth against a local fake GitHub)
 - `bash test/mcp-concurrency.sh` and `bash test/mcp-failure.sh`
+- `bash test/mcp-oidc.sh` (OIDC bundles against a local fake provider)
 
 ## Remote MCP
 
@@ -68,6 +69,42 @@ Calls are serialized per vault, and local devices keep syncing alongside.
 `/grants` lists connected apps and revokes them. A static `MCP_TOKEN` bearer is also accepted as a full, unrestricted grant; it is intended for local development and service-to-service use.
 
 **Trade-off:** the Worker holds the derived vault key (`VAULT_KEY_HEX`) and decrypts in memory while serving. Data at rest stays ciphertext.
+
+## Bundles for an OIDC provider's callers
+
+A deployment can also serve **many vaults by name** to callers that sign in with an OIDC provider such as Keycloak or Entra. A service fetches an access token with client credentials and presents it at `/mcp`. Organizations then share one hub, and each one reaches only its own bundle.
+
+Set `OIDC_ISSUER` to turn this on. The other settings are then required:
+
+| Setting | What it is |
+|---|---|
+| `OIDC_ISSUER` | The token's `iss`, exactly. |
+| `OIDC_JWKS_URL` | Where the provider publishes its signing keys (RS256 or ES256). |
+| `OIDC_AUDIENCE` | The `aud` a token must carry: the hub's address as the provider knows it. |
+| `OIDC_ACTOR_CLAIM` | The claim that names the caller's organization. Defaults to `okf_org`. |
+| `OIDC_GRANTS` | A JSON list of rules. Each has `bundle`, `access` (`read` or `write`) and optionally `role` (a realm role the token must hold). `{actor}` in `bundle` is the actor claim, and `prefix/*` covers every bundle under the prefix. |
+| `VAULT_MASTER_KEY_HEX` (secret) | 64 hex characters. Every bundle vault's key is derived from it. |
+
+For example, each organization writes its own bundle, and a reader role reads all of them:
+
+```json
+[
+  { "bundle": "orgs/oidc-{actor}", "access": "write" },
+  { "role": "knowledge-reader", "bundle": "orgs/*", "access": "read" }
+]
+```
+
+A request picks its bundle in one of three ways, checked in this order:
+
+1. The tools' `bundle` argument.
+2. `/mcp?bundle=<name>`.
+3. The token's only exact grant.
+
+Anything the token's grants do not cover is refused with `Access denied`. `GET /v1/snapshot?bundle=<name>` returns every file of a bundle to a token that may read it.
+
+Each bundle is its own vault. Both the vault ID and its key come from the bundle name, so a new name is simply an empty vault until its first write. The hub derives every key, so these vaults are **not blind to the hub**; data at rest stays ciphertext. One okf engine serves every vault in an isolate, one call at a time, and it reloads when the next call is for a different vault.
+
+`MCP_TOKEN` and the GitHub OAuth flow keep serving `MCP_VAULT_ID` as before.
 
 ## Configuration
 
