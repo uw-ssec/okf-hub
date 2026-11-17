@@ -1,21 +1,14 @@
 {
   "compilerOptions": {
     "target": "es2024",
-    "module": "es2022",
-    "moduleResolution": "bundler",
-    "lib": [
-      "es2024"
-    ],
-    "types": [
-      "./worker-configuration.d.ts"
-    ],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["es2024"],
+    "types": ["node"],
+    "outDir": "dist",
     "strict": true,
-    "noEmit": true,
     "skipLibCheck": true,
     "resolveJsonModule": true
   },
-  "include": [
-    "src/**/*.ts",
-    "worker-configuration.d.ts"
-  ]
+  "include": ["src/**/*.ts"]
 }
