@@ -10,6 +10,11 @@ RUN mkdir -p /out \
  && GOOS=js GOARCH=wasm go build -trimpath -ldflags="-s -w" -o /out/okf-engine.wasm ./cmd/okf-wasm-engine \
  && cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" /out/wasm_exec.js \
  && cp pkg/okf/schemas/tools.json /out/okf-tools.json
+# The engine ships compiled into the image, so its notices go with it: okf-agent-memory (MIT) and the Go
+# runtime, standard library and golang.org/x modules (Go's BSD license), which cover wasm_exec.js too.
+RUN mkdir -p /licenses/okf-agent-memory /licenses/go \
+ && cp LICENSE /licenses/okf-agent-memory/LICENSE \
+ && cp "$(go env GOROOT)/LICENSE" /licenses/go/LICENSE
 
 # Build: compile the TypeScript with the engine artifacts in place.
 FROM node:22-slim AS build
@@ -29,6 +34,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
+COPY --from=engine /licenses ./licenses
 USER 10001
 EXPOSE 7878
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
