@@ -6,8 +6,8 @@ services:
       POSTGRES_PASSWORD: test
     ports:
       - "55432:5432"
-  azurite: # host port 10010: 10000 is often taken by other local stacks
+  azurite: # host port 55100: avoids the crowded 10000 range other local stacks use
     image: mcr.microsoft.com/azure-storage/azurite
     command: azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
     ports:
-      - "10010:10000"
+      - "55100:10000"
