@@ -94,6 +94,47 @@ describe("PgHeadStore", () => {
     expect(await store.history(v, 1)).toHaveLength(1);
   });
 
+  it("a backend killed mid-commit fails that commit, and the process and the next commit carry on", async () => {
+    // A pool of its own, tagged so the test can find its backend, with an idle-error listener as in src/main.ts.
+    const tag = `okf_kill_${randomBytes(4).toString("hex")}`;
+    const victimPool = new pg.Pool({ connectionString: url, options: `-c search_path=${schema}`, application_name: tag });
+    victimPool.on("error", () => {});
+    const victim = new PgHeadStore(victimPool);
+    const v = vault();
+    const [a, b, c] = [commitId(), commitId(), commitId()];
+    await victim.commit(v, "", a);
+
+    // Hold the vault's head row so the next commit blocks inside its transaction, mid-query.
+    const holder = await admin.connect();
+    try {
+      await holder.query("BEGIN");
+      await holder.query(`SELECT 1 FROM ${schema}.vault_head WHERE vault_id = $1 FOR UPDATE`, [v]);
+      const pending = victim.commit(v, a, b);
+      pending.catch(() => {}); // asserted below
+      let pid: number | undefined;
+      for (let i = 0; i < 100 && pid === undefined; i++) {
+        const { rows } = await admin.query<{ pid: number }>(
+          "SELECT pid FROM pg_stat_activity WHERE application_name = $1 AND wait_event_type = 'Lock'",
+          [tag]
+        );
+        pid = rows[0]?.pid;
+        if (pid === undefined) await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(pid, "the commit never blocked on the row lock").toBeDefined();
+      await admin.query("SELECT pg_terminate_backend($1)", [pid]);
+      await expect(pending).rejects.toThrow();
+      await holder.query("ROLLBACK");
+    } finally {
+      holder.release();
+    }
+
+    // Let the dead connection's 'end' and 'error' events fire; an unhandled one would fail this run.
+    await new Promise((r) => setTimeout(r, 200));
+    expect(await victim.commit(v, a, c)).toMatchObject({ ok: true, head: c, seq: 2 });
+    expect(victimPool.totalCount).toBeLessThanOrEqual(1);
+    await victimPool.end();
+  });
+
   it("migrate twice is harmless", async () => {
     await store.migrate();
     await store.migrate();

@@ -10,6 +10,7 @@ import { loadConfig, type HubConfig } from "./config.js";
 import { EngineHost } from "./engine-host.js";
 import { nodeListener } from "./node-adapter.js";
 import { PgHeadStore } from "./pg-heads.js";
+import { poolConfig } from "./pg-pool.js";
 
 const SHUTDOWN_GRACE_MS = 10_000;
 
@@ -21,7 +22,7 @@ try {
   process.exit(1);
 }
 
-const pool = new pg.Pool({ connectionString: config.databaseUrl });
+const pool = new pg.Pool(poolConfig(config.databaseUrl));
 // An idle client losing its connection must not crash the process; the next query reconnects.
 pool.on("error", (err) => console.error(JSON.stringify({ postgres: "idle_client_error", error: String(err) })));
 const heads = new PgHeadStore(pool);

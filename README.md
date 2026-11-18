@@ -29,7 +29,7 @@ The service refuses to start without its required settings:
 | `OIDC_AUDIENCE` | yes | The `aud` a token must carry. |
 | `OIDC_GRANTS` | yes | The JSON grant rules. |
 | `VAULT_MASTER_KEY_HEX` | yes (secret) | 64 hex characters; every bundle's vault key derives from it. |
-| `DATABASE_URL` | yes (secret) | Postgres connection string. The hub creates its tables on start. |
+| `DATABASE_URL` | yes (secret) | Postgres connection string. The hub creates its tables on start. For TLS use `sslmode=verify-full`, which checks the server's certificate and host name against Node's bundled CA store; `sslrootcert=system` (libpq's spelling of that) is accepted and dropped, and no CA file is read. Queries time out after 15 s and connecting after 5 s. |
 | `AZURE_STORAGE_CONNECTION_STRING` | yes (secret) | Blob Storage connection string. |
 | `OIDC_ACTOR_CLAIM` | no | The claim naming the caller's organization. Default `okf_org`. |
 | `BLOB_CONTAINER` | no | The blob container, created on start if missing. Default `okf-hub`. |

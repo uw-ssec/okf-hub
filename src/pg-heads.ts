@@ -44,6 +44,11 @@ export class PgHeadStore implements HeadStore {
 
   async commit(vaultId: string, expected: string, next: string): Promise<CommitResult> {
     const client = await this.pool.connect();
+    // pg-pool drops its error listener while a client is checked out, and a lost connection (a
+    // failover, a killed backend) always emits 'error': without a listener here it crashes the process.
+    const onError = (err: Error) => console.error(JSON.stringify({ postgres: "client_error", error: String(err) }));
+    client.on("error", onError);
+    let failed: Error | undefined;
     try {
       await client.query("BEGIN");
       const lock = () =>
@@ -83,10 +88,13 @@ export class PgHeadStore implements HeadStore {
       await client.query("COMMIT");
       return { ok: true, head: next, previous: current, seq: Number(count.rows[0].n), accepted_at: now };
     } catch (err) {
+      failed = err instanceof Error ? err : new Error(String(err));
       await client.query("ROLLBACK").catch(() => {});
       throw err;
     } finally {
-      client.release();
+      client.off("error", onError);
+      // A failed transaction may have left the connection broken or mid-transaction: discard it.
+      client.release(failed);
     }
   }
 
