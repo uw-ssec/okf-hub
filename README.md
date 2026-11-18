@@ -20,16 +20,37 @@ The hub's own engine is built from the fork commit in `engine/FORK_COMMIT`.
 
 ## Using it
 
+This branch (`container`) runs the hub as one Node service in a container. The Cloudflare version lives on `main`.
+
+It serves exactly three paths; every other path, the hub REST API (`/api/v1/...`) included, is `404`:
+
+- `POST /mcp`: the six okf tools for a bundle, as a stateless MCP server (Streamable HTTP, JSON responses).
+- `GET /v1/snapshot?bundle=<name>`: every file of a bundle, for a token that may read it.
+- `GET /healthz`: `200 ok` while Postgres and Blob Storage answer and the okf engine is running, `503` otherwise.
+
+Callers present an access token from an OIDC provider such as Keycloak as the bearer; nothing else is accepted (no static tokens, no GitHub OAuth). The tokens' grants decide which bundles they reach, as described in [Bundles for an OIDC provider's callers](#bundles-for-an-oidc-providers-callers). Vault heads live in Postgres and blobs in Azure Blob Storage, under the same `vaults/<id>/blobs/...` and `vaults/<id>/refs/...` keys as on `main`.
+
+The service refuses to start without its required settings:
+
+| Setting | Required | What it is |
+|---|---|---|
+| `OIDC_ISSUER` | yes | The token's `iss`, exactly. |
+| `OIDC_JWKS_URL` | yes | Where the provider publishes its signing keys. |
+| `OIDC_AUDIENCE` | yes | The `aud` a token must carry. |
+| `OIDC_GRANTS` | yes | The JSON grant rules. |
+| `VAULT_MASTER_KEY_HEX` | yes (secret) | 64 hex characters; every bundle's vault key derives from it. |
+| `DATABASE_URL` | yes (secret) | Postgres connection string. The hub creates its tables on start. |
+| `AZURE_STORAGE_CONNECTION_STRING` | yes (secret) | Blob Storage connection string. |
+| `OIDC_ACTOR_CLAIM` | no | The claim naming the caller's organization. Default `okf_org`. |
+| `BLOB_CONTAINER` | no | The blob container, created on start if missing. Default `okf-hub`. |
+| `PORT` | no | The HTTP port. Default `7878`. |
+
 ```bash
-# Once per bundle (prints the Emergency Kit: store it somewhere safe)
-okf hub init-vault -hub <hub-url> knowledge
-
-# Day to day (flags go BEFORE the bundle path; Go's flag parser stops at it).
-# OKF_HUB_TOKEN, OKF_HUB_PASSWORD and OKF_HUB_SECRET_KEY come from the environment.
-okf hub sync -hub <hub-url> knowledge
+npm ci
+npm run build:engine   # the okf engine as Wasm, from engine/FORK_COMMIT (needs Go)
+npm run build          # dist/, with the engine beside it
+npm start              # node dist/main.js; SIGTERM stops it gracefully
 ```
-
-Add `.okf/` to the bundle repo's `.gitignore`; it holds per-device sync state.
 
 ## Development
 
@@ -38,15 +59,11 @@ npm install
 npm run build:engine        # builds the Go engine to Wasm from the pinned fork commit
 npm run typecheck
 npm test
-npm run dev                 # local wrangler dev on :8787 (uses .dev.vars)
+npm run test:integration    # against compose.test.yml's Postgres and Azurite
 ```
 
 Integration tests run the real `okf` CLI against a throwaway vault built from okf's public sample bundle. Never point them at a real bundle.
 
-- `bash test/e2e.sh` (hub REST API)
-- `bash test/mcp-e2e.sh` (MCP tools, including parity with local `okf mcp`)
-- `bash test/mcp-oauth.sh` (OAuth against a local fake GitHub)
-- `bash test/mcp-concurrency.sh` and `bash test/mcp-failure.sh`
 - `bash test/mcp-oidc.sh` (OIDC bundles against a local fake provider)
 
 ## Remote MCP

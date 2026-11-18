@@ -1,6 +1,6 @@
 import type { ToolResult } from "./engine-host.js";
-import { checkInput, engineArgs, type Policy } from "./policy";
-import { filterResult } from "./policy-output";
+import { checkInput, engineArgs, type Policy } from "./policy.js";
+import { filterResult } from "./policy-output.js";
 
 /** The slice of the VaultEngine Durable Object a tool call needs. */
 export type Engine = { callTool(name: string, args: Record<string, unknown>, actor: string): Promise<ToolResult> };

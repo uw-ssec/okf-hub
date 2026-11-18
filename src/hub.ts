@@ -29,7 +29,7 @@ const refKey = (vault: string, seq: number, commit: string) =>
   `vaults/${vault}/refs/${String(seq).padStart(12, "0")}-${commit}.json`;
 
 async function sha256Hex(data: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", data as BufferSource);
+  const digest = await crypto.subtle.digest("SHA-256", data as Uint8Array<ArrayBuffer>);
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
@@ -88,7 +88,7 @@ async function handleBlob(request: Request, stores: Stores, vault: string, hash:
   if (request.method === "GET") {
     const object = await stores.blobs.get(blobKey(vault, hash));
     if (!object) return error(404, "not found");
-    return new Response(object as BodyInit, { headers: { "Content-Type": "application/octet-stream" } });
+    return new Response(object as Uint8Array<ArrayBuffer>, { headers: { "Content-Type": "application/octet-stream" } });
   }
   if (request.method === "PUT") {
     const declared = Number(request.headers.get("Content-Length") ?? "0");

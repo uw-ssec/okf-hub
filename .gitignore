@@ -9,3 +9,4 @@ test/.work/
 src/engine/okf-engine.wasm
 src/engine/wasm_exec.js
 src/okf-tools.json
+dist/

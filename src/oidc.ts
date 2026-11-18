@@ -6,13 +6,14 @@
  * OIDC_ISSUER, be addressed to OIDC_AUDIENCE and be unexpired. Its grants come from OIDC_GRANTS
  * (src/bundles.ts), read against its actor claim (OIDC_ACTOR_CLAIM) and realm roles.
  */
-import { grantsFor, parseGrantRules, type BundleGrant, type GrantRule } from "./bundles";
-import { sanitizeActor } from "./policy";
+import { grantsFor, parseGrantRules, type BundleGrant, type GrantRule } from "./bundles.js";
+import { sanitizeActor } from "./policy.js";
+import type { webcrypto } from "node:crypto";
 
 export type OidcConfig = { issuer: string; jwksUrl: string; audience: string; actorClaim: string; rules: GrantRule[] };
 export type OidcCaller = { clientName: string; grants: BundleGrant[] };
 type Claims = Record<string, unknown>;
-type Jwk = JsonWebKey & { kid?: string; alg?: string; use?: string };
+type Jwk = webcrypto.JsonWebKey & { kid?: string; alg?: string; use?: string };
 
 const ALGORITHMS: Record<string, { name: string; hash?: string; namedCurve?: string }> = {
   RS256: { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
@@ -40,7 +41,7 @@ export function oidcConfig(env: Partial<Record<string, unknown>>): OidcConfig | 
   };
 }
 
-function b64urlBytes(text: string): Uint8Array {
+function b64urlBytes(text: string): Uint8Array<ArrayBuffer> {
   const b64 = text.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(text.length / 4) * 4, "=");
   return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 }

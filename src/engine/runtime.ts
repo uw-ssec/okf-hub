@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { Volume, createFsFromVolume } from "memfs";
 import "./wasm_exec.js";
-import { serialQueue } from "../serial";
+import { serialQueue } from "../serial.js";
 
 export type HubFetch = (method: string, path: string, body: Uint8Array | null) => Promise<{ status: number; body: Uint8Array }>;
 
@@ -16,6 +16,14 @@ declare global {
   var okfEngineSync: (message: string) => Promise<string>;
   // eslint-disable-next-line no-var
   var okfEngineHandle: (requestLine: string) => Promise<string>;
+  // Node has WebAssembly built in, but lib "es2024" carries no types for it: declare what this module uses.
+  namespace WebAssembly {
+    type Imports = Record<string, Record<string, unknown>>;
+    interface Module {}
+    interface Instance {}
+    function compile(bytes: Uint8Array): Promise<Module>;
+    function instantiate(module: Module, imports: Imports): Promise<Instance>;
+  }
 }
 
 export const BUNDLE_DIR = "/vault/knowledge";

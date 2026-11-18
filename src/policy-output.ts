@@ -1,5 +1,5 @@
 import type { ToolResult } from "./engine-host.js";
-import { SEARCH_MAX, isExcluded, linkTarget, stripExcludedLinks, type Policy } from "./policy";
+import { SEARCH_MAX, isExcluded, linkTarget, stripExcludedLinks, type Policy } from "./policy.js";
 
 type SearchHit = { concept_id: string; inbound?: string[]; outbound?: string[] } & Record<string, unknown>;
 type Concept = { id: string; body?: string; raw_content?: string } & Record<string, unknown>;

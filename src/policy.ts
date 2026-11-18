@@ -3,7 +3,7 @@
  * may call and which folders it may never read, write, or see links into.
  * Pure functions only, so every rule is unit-tested.
  */
-import { parseGrants, type BundleGrant } from "./bundles";
+import { parseGrants, type BundleGrant } from "./bundles.js";
 
 export type Access = "full" | "read";
 /** `bundles` is set for OIDC callers only: then the request picks a bundle and its grant decides the access. */
