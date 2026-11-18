@@ -1,4 +1,4 @@
-import { McpServer, WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
+import { createMcpHandler, McpServer, type McpHttpHandler } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import okfTools from "./okf-tools.json" with { type: "json" };
 import { toolInputShape } from "./mcp-schema.js";
@@ -77,6 +77,25 @@ function createServer(host: EngineHost, policy: Policy, requestBundle: string | 
   return server;
 }
 
+/** What one request's server is built from, carried to the factory as the request's auth extra. */
+type McpRequestContext = { host: EngineHost; policy: Policy; requestBundle: string | null };
+
+/**
+ * One handler per process, serving both the 2026-07-28 revision and 2025-era traffic (stateless fallback)
+ * from the same per-request factory. The caller's policy reaches the factory through `authInfo.extra`.
+ */
+let mcpHandler: McpHttpHandler | undefined;
+function sharedHandler(): McpHttpHandler {
+  mcpHandler ??= createMcpHandler(
+    ({ authInfo }) => {
+      const { host, policy, requestBundle } = authInfo?.extra as McpRequestContext;
+      return createServer(host, policy, requestBundle);
+    },
+    { responseMode: "json" },
+  );
+  return mcpHandler;
+}
+
 /** The caller is already authenticated (src/app.ts); `props` is the policy its token resolved to. */
 export async function handleMcp(request: Request, host: EngineHost, props: GrantProps): Promise<Response> {
   let policy: Policy;
@@ -90,18 +109,10 @@ export async function handleMcp(request: Request, host: EngineHost, props: Grant
   if (requestBundle !== null && !accessFor(policy.bundles ?? [], requestBundle)) {
     return Response.json({ error: "forbidden", error_description: `This token may not use the bundle "${requestBundle}".` }, { status: 403 });
   }
-  // Stateless serving has no session for GET (a standalone stream) or DELETE (end a session) to act on.
-  if (request.method !== "POST") {
-    return Response.json({ jsonrpc: "2.0", error: { code: -32000, message: "Method not allowed." }, id: null }, { status: 405 });
+  if (request.method === "POST") {
+    // Which calls each app makes (method and tool name only), for diagnosing clients.
+    console.log(JSON.stringify({ mcp: rpcSummary(await request.clone().text()), app: policy.clientName, access: policy.access, bundle: requestBundle ?? undefined }));
   }
-  // Which calls each app makes (method and tool name only), for diagnosing clients.
-  console.log(JSON.stringify({ mcp: rpcSummary(await request.clone().text()), app: policy.clientName, access: policy.access, bundle: requestBundle ?? undefined }));
-  const server = createServer(host, policy, requestBundle);
-  const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-  try {
-    await server.connect(transport);
-    return await transport.handleRequest(request);
-  } finally {
-    await Promise.all([transport.close().catch(() => {}), server.close().catch(() => {})]);
-  }
+  const context: McpRequestContext = { host, policy, requestBundle };
+  return sharedHandler().fetch(request, { authInfo: { token: "", clientId: policy.clientName, scopes: [], extra: context } });
 }

@@ -1,22 +1,12 @@
 # okf-hub
 
-A persistent, authenticated [OKF Memory Hub](https://github.com/okf-memory/okf-agent-memory) on Cloudflare Workers. It speaks the same REST API as `okf hub serve`, so the `okf` CLI works against it unchanged, and it serves the vault to AI clients as a remote MCP server.
+An [OKF Memory Hub](https://github.com/okf-memory/okf-agent-memory) that serves shared knowledge bundles to AI clients as a remote MCP server, run as one Node service in a container.
 
-- **Blind storage:** the hub stores client-side encrypted envelopes (AES-256-GCM) in R2, content-addressed by SHA-256 and verified on upload.
-- **Head pointers:** one Durable Object per vault, with an atomic compare-and-swap (stale writes get `409`) and an append-only commit history.
-- **Auth:** a bearer token (`HUB_TOKEN` secret) on every hub API request except `/healthz`.
+- **Storage:** vault heads in Postgres, with an atomic compare-and-swap (stale writes are refused) and an append-only commit history. Encrypted blobs in Azure Blob Storage, content-addressed by SHA-256.
+- **Engine:** okf itself, built to Wasm from the [uw-ssec fork](https://github.com/uw-ssec/okf-agent-memory) commit in `engine/FORK_COMMIT`, runs in process.
+- **Auth:** access tokens from an OIDC provider such as Keycloak, and nothing else.
 
-Unlike the embedded `okf hub serve`, this hub persists data across restarts, enforces auth, validates vault IDs and blob hashes, and refuses commits that point at blobs never uploaded.
-
-## Client requirements
-
-Use an `okf` build from `main` of the [uw-ssec fork](https://github.com/uw-ssec/okf-agent-memory). It has what the hub relies on:
-
-- Sync state that persists between runs. Without it, only the first push to a vault succeeds and `sync` reverts local edits.
-- Per-listing `index.md` merging. Without it, creating different concepts in the same folder on two devices collides.
-- The vault password and Secret Key read from `OKF_HUB_PASSWORD` / `OKF_HUB_SECRET_KEY` instead of visible flags.
-
-The hub's own engine is built from the fork commit in `engine/FORK_COMMIT`.
+The Cloudflare Workers version, which also speaks the hub REST API to the `okf` CLI, lives on `main`.
 
 ## Using it
 
@@ -24,7 +14,7 @@ This branch (`container`) runs the hub as one Node service in a container. The C
 
 It serves exactly three paths; every other path, the hub REST API (`/api/v1/...`) included, is `404`:
 
-- `POST /mcp`: the six okf tools for a bundle, as a stateless MCP server (Streamable HTTP, JSON responses).
+- `POST /mcp`: the six okf tools for a bundle, as a stateless MCP server (Streamable HTTP; the 2025 protocol revisions and 2026-07-28).
 - `GET /v1/snapshot?bundle=<name>`: every file of a bundle, for a token that may read it.
 - `GET /healthz`: `200 ok` while Postgres and Blob Storage answer and the okf engine is running, `503` otherwise.
 
@@ -62,45 +52,27 @@ npm test
 npm run test:integration    # against compose.test.yml's Postgres and Azurite
 ```
 
-Integration tests run the real `okf` CLI against a throwaway vault built from okf's public sample bundle. Never point them at a real bundle.
+`npm run test:integration` needs the Postgres and Azurite services in `compose.test.yml` (`docker-compose -f compose.test.yml up -d`). Never point tests at a real deployment.
 
 - `bash test/mcp-oidc.sh` (OIDC bundles against a local fake provider)
 
 ## Remote MCP
 
-`/mcp` serves the vault named by `MCP_VAULT_ID` as a stateless MCP server. It exposes the same six tools as the local `okf mcp`: `okf_search`, `okf_show`, `okf_validate`, `okf_create`, `okf_update`, `okf_relate`.
+`/mcp` exposes the same six tools as the local `okf mcp`: `okf_search`, `okf_show`, `okf_validate`, `okf_create`, `okf_update`, `okf_relate`.
 
-**How it works:** okf itself (pinned in `engine/FORK_COMMIT`, built to Wasm by `scripts/build-engine.sh`) runs inside the `VaultEngine` Durable Object over an in-memory filesystem holding the decrypted vault. Each call:
+**How it works:** one okf engine per process runs over an in-memory filesystem holding one decrypted vault at a time. Each call:
 
-1. pulls from the hub;
+1. pulls the vault from the hub's stores;
 2. runs okf's own MCP handler;
-3. syncs writes back through the hub's compare-and-swap and 3-way merge.
+3. syncs writes back through the compare-and-swap and okf's 3-way merge.
 
-Calls are serialized per vault, and local devices keep syncing alongside.
-
-**Auth: OAuth 2.1.** The Worker is its own authorization server (`@cloudflare/workers-oauth-provider`), with discovery, `/authorize`, `/token` and `/register` (DCR). Approval requires a GitHub sign-in as the account in `ALLOWED_GITHUB_USER_ID`. Each grant carries its own policy:
-
-- **Read only** (the default) or **read and write**.
-- **Hidden folders**, which the app can't read or change. This is a disclosure guardrail, not a sealed partition.
-
-`/grants` lists connected apps and revokes them. A static `MCP_TOKEN` bearer is also accepted as a full, unrestricted grant; it is intended for local development and service-to-service use.
-
-**Trade-off:** the Worker holds the derived vault key (`VAULT_KEY_HEX`) and decrypts in memory while serving. Data at rest stays ciphertext.
+Calls run one at a time. A call for a different vault reloads the engine with that vault. If the engine's Go runtime exits, `/healthz` turns `503` so the platform restarts the container.
 
 ## Bundles for an OIDC provider's callers
 
-A deployment can also serve **many vaults by name** to callers that sign in with an OIDC provider such as Keycloak or Entra. A service fetches an access token with client credentials and presents it at `/mcp`. Organizations then share one hub, and each one reaches only its own bundle.
+The hub serves **many vaults by name** to callers that sign in with an OIDC provider such as Keycloak or Entra. A service fetches an access token with client credentials and presents it at `/mcp`. Organizations then share one hub, and each one reaches only its own bundle.
 
-Set `OIDC_ISSUER` to turn this on. The other settings are then required:
-
-| Setting | What it is |
-|---|---|
-| `OIDC_ISSUER` | The token's `iss`, exactly. |
-| `OIDC_JWKS_URL` | Where the provider publishes its signing keys (RS256 or ES256). |
-| `OIDC_AUDIENCE` | The `aud` a token must carry: the hub's address as the provider knows it. |
-| `OIDC_ACTOR_CLAIM` | The claim that names the caller's organization. Defaults to `okf_org`. |
-| `OIDC_GRANTS` | A JSON list of rules. Each has `bundle`, `access` (`read` or `write`) and optionally `role` (a realm role the token must hold). `{actor}` in `bundle` is the actor claim, and `prefix/*` covers every bundle under the prefix. |
-| `VAULT_MASTER_KEY_HEX` (secret) | 64 hex characters. Every bundle vault's key is derived from it. |
+A token must be signed with a key from `OIDC_JWKS_URL` (RS256 or ES256), carry `OIDC_ISSUER` as its `iss` and `OIDC_AUDIENCE` (the hub's address as the provider knows it) in its `aud`, and be unexpired. `OIDC_GRANTS` is a JSON list of rules. Each has `bundle`, `access` (`read` or `write`) and optionally `role` (a realm role the token must hold). `{actor}` in `bundle` is the token's actor claim (`OIDC_ACTOR_CLAIM`), and `prefix/*` covers every bundle under the prefix.
 
 For example, each organization writes its own bundle, and a reader role reads all of them:
 
@@ -119,21 +91,14 @@ A request picks its bundle in one of three ways, checked in this order:
 
 Anything the token's grants do not cover is refused with `Access denied`. `GET /v1/snapshot?bundle=<name>` returns every file of a bundle to a token that may read it.
 
-Each bundle is its own vault. Both the vault ID and its key come from the bundle name, so a new name is simply an empty vault until its first write. The hub derives every key, so these vaults are **not blind to the hub**; data at rest stays ciphertext. One okf engine serves every vault in an isolate, one call at a time, and it reloads when the next call is for a different vault.
-
-`MCP_TOKEN` and the GitHub OAuth flow keep serving `MCP_VAULT_ID` as before.
+Each bundle is its own vault. Both the vault ID and its key come from the bundle name, so a new name is simply an empty vault until its first write. The hub derives every key, so these vaults are **not blind to the hub**; data at rest stays ciphertext. One okf engine serves every vault in the process, one call at a time, and it reloads when the next call is for a different vault.
 
 ## Configuration
 
-Set the placeholders in `wrangler.jsonc` before deploying: `MCP_VAULT_ID`, `PUBLIC_URL`, `ALLOWED_GITHUB_USER_ID`, `GITHUB_CLIENT_ID`, and the `OAUTH_KV` namespace ID.
-
-Secrets (`wrangler secret put`, never committed): `HUB_TOKEN`, `MCP_TOKEN`, `VAULT_KEY_HEX`, `GITHUB_CLIENT_SECRET`, `COOKIE_SECRET`.
+All settings come from the environment; see the table under [Using it](#using-it). Keep `VAULT_MASTER_KEY_HEX`, `DATABASE_URL` and `AZURE_STORAGE_CONNECTION_STRING` in a secret store, never in the repository. Losing `VAULT_MASTER_KEY_HEX` makes every bundle unreadable.
 
 ## Backup and restore
 
-Every accepted commit also writes an append-only ref to R2 (`vaults/<id>/refs/<seq>-<commit>.json`), so the bucket alone is a complete backup. Copy it anywhere with a read-only R2 token.
+A hub's state is its Postgres database (the `vault_head` and `vault_history` tables) and its blob container. Back up both with the platform's own tools, such as Postgres point-in-time restore and Blob Storage soft delete or versioning, and keep `VAULT_MASTER_KEY_HEX` with them.
 
-```bash
-OKF_HUB_TOKEN=... bash scripts/restore.sh /path/to/backup <vault-id> <hub-url>
-okf hub pull -hub <hub-url> knowledge
-```
+Every accepted commit also writes an append-only ref, `vaults/<id>/refs/<seq>-<commit>.json`, beside the blobs. So the blob container alone holds every vault's history: to restore a vault from it, copy its objects back and set its `vault_head` row to the commit of its highest-numbered ref.

@@ -168,6 +168,31 @@ describe("/mcp", () => {
     expect(calls[0]).toMatchObject({ name: "okf_search", actor: "okf-org-acme", vaultId: await vaultIdFor("orgs/oidc-acme") });
   });
 
+  it("a 2026-07-28 client lists the tools and calls its own bundle", async () => {
+    const { handle, calls } = app();
+    const bearer = await token();
+    const meta = {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientInfo": { name: "test", version: "1" },
+      "io.modelcontextprotocol/clientCapabilities": {},
+    };
+    const modern = (method: string, params: Record<string, unknown>, headers: Record<string, string>) =>
+      new Request("http://hub.test/mcp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: MCP_ACCEPT, "MCP-Protocol-Version": "2026-07-28", Authorization: `Bearer ${bearer}`, ...headers },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: { ...params, _meta: meta } }),
+      });
+
+    const listed = await handle(modern("tools/list", {}, { "Mcp-Method": "tools/list" }));
+    expect(listed.status).toBe(200);
+    expect(((await rpcBody(listed)).result?.tools as unknown[]).length).toBe(6);
+
+    const called = await handle(modern("tools/call", { name: "okf_search", arguments: { query: "door" } }, { "Mcp-Method": "tools/call", "Mcp-Name": "okf_search" }));
+    expect(called.status).toBe(200);
+    expect(((await rpcBody(called)).result?.content as { text: string }[])[0].text).toBe("ok");
+    expect(calls).toEqual([{ name: "okf_search", args: { query: "door" }, actor: "okf-org-acme", vaultId: await vaultIdFor("orgs/oidc-acme") }]);
+  });
+
   it("an org naming another org's bundle gets Access denied", async () => {
     const { handle, calls } = app();
     const bearer = await token();
