@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# OIDC sign-in and named bundles: each organization's token reaches its own bundle only, a reader role
-# reads every bundle and writes none, and bundles stay apart while one engine serves them all.
+# End to end against the compose stack (compose.yml): OIDC sign-in and named bundles. Each organization's
+# token reaches its own bundle only, a reader role reads every bundle and writes none, bundles stay apart while
+# one engine serves them all, and the container restarts clean.
 set -euo pipefail
 ROOTDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+COMPOSE="${COMPOSE:-docker compose}"
 pass=0 fail=0
 ok() { echo "  PASS $1"; pass=$((pass + 1)); }
 bad() { echo "  FAIL $1"; fail=$((fail + 1)); }
 check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 json() { python3 -I -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
-FAKE_PORT="${FAKE_OIDC_PORT:-8792}"
-FAKE="http://127.0.0.1:$FAKE_PORT"
+HUB="http://127.0.0.1:${HUB_PORT:-57878}"
+FAKE="http://127.0.0.1:${FAKE_OIDC_PORT:-58792}"
+# These must match OIDC_ISSUER and OIDC_AUDIENCE in compose.yml.
 ISSUER="http://issuer.test/realms/test"
-node "$ROOTDIR/test/fake-oidc.mjs" "$FAKE_PORT" & FAKE_PID=$!
-GRANTS='[{"bundle":"orgs/oidc-{actor}","access":"write"},{"role":"knowledge-reader","bundle":"orgs/*","access":"read"}]'
-export EXTRA_VARS="OIDC_ISSUER:$ISSUER OIDC_JWKS_URL:$FAKE/certs OIDC_AUDIENCE:http://okf.test OIDC_GRANTS:$GRANTS"
-export EXTRA_DEV_VARS="VAULT_MASTER_KEY_HEX=$(openssl rand -hex 32)"
-source "$ROOTDIR/test/mcp-env.sh"
-trap 'stop_dev; kill "$FAKE_PID" 2>/dev/null || true' EXIT
+
+for _ in $(seq 60); do curl -sf "$HUB/healthz" >/dev/null && break; sleep 1; done
+curl -sf "$HUB/healthz" >/dev/null || { echo "hub did not become healthy"; exit 1; }
 
 token() { curl -s -X POST "$FAKE/token" -d "{\"claims\":$1${2:+,\"key\":\"$2\"}}"; }
 org_token() { token "{\"iss\":\"$ISSUER\",\"aud\":\"http://okf.test\",\"azp\":\"okf-org-$1\",\"okf_org\":\"$1\"}"; }
@@ -47,7 +47,6 @@ check "wrong issuer -> 401" '[ "$(call "$WRONG_ISS" okf_search "$SEARCH" | statu
 check "unknown signing key -> 401" '[ "$(call "$WRONG_KEY" okf_search "$SEARCH" | status)" = 401 ]'
 check "a person's token with no org claim -> 401" '[ "$(call "$PERSON" okf_search "$SEARCH" | status)" = 401 ]'
 check "an org token works (control)" '[ "$(call "$ACME" okf_search "$SEARCH" | status)" = 200 ]'
-check "MCP_TOKEN still serves the configured vault" '[ "$(call "$MCP_TOKEN" okf_search "{\"query\":\"architecture\"}" | is_error)" = False ]'
 
 echo "== each org writes and reads its own bundle"
 check "acme creates a concept, reported in its bundle" 'create "$ACME" facts/lab-door "Lab door" "Code $MARK" | text | grep -q "in orgs/oidc-acme$"'
@@ -60,7 +59,6 @@ check "beta at ?bundle=orgs/oidc-acme -> 403" '[ "$(call "$BETA" okf_search "{\"
 check "beta writes its own concept" '[ "$(create "$BETA" facts/lab-door "Beta door" "Beta only" | is_error)" = False ]'
 check "acme still sees only its own (engine switched vaults cleanly)" 'call "$ACME" okf_show "{\"concept_id\":\"facts/lab-door\"}" | text | grep -q "$MARK"'
 check "beta sees only its own" '! call "$BETA" okf_show "{\"concept_id\":\"facts/lab-door\"}" | text | grep -q "$MARK"'
-check "the configured vault has neither" '! call "$MCP_TOKEN" okf_search "{\"query\":\"lab door\"}" | text | grep -q "lab-door"'
 
 echo "== the reader"
 check "reader reads acme via ?bundle=" 'call "$READER" okf_show "{\"concept_id\":\"facts/lab-door\"}" "?bundle=orgs/oidc-acme" | text | grep -q "$MARK"'
@@ -72,6 +70,11 @@ check "snapshot carries index and log, not sync state" 'echo "$SNAP" | json "sor
 check "snapshot of an unwritten bundle is empty" '[ "$(curl -s -H "Authorization: Bearer $READER" "$HUB/v1/snapshot?bundle=orgs/oidc-nobody" | json "len(d[\"files\"])")" = 0 ]'
 check "beta cannot snapshot acme -> 403" '[ "$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $BETA" "$HUB/v1/snapshot?bundle=orgs/oidc-acme")" = 403 ]'
 check "snapshot without a token -> 401" '[ "$(curl -s -o /dev/null -w "%{http_code}" "$HUB/v1/snapshot?bundle=orgs/oidc-acme")" = 401 ]'
+
+echo "== restart"
+$COMPOSE -f "$ROOTDIR/compose.yml" restart hub >/dev/null 2>&1
+for _ in $(seq 60); do curl -sf "$HUB/healthz" >/dev/null && break; sleep 1; done
+check "the container restarts clean" 'call "$ACME" okf_show "{\"concept_id\":\"facts/lab-door\"}" | text | grep -q "$MARK"'
 
 echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]

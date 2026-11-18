@@ -1,0 +1,44 @@
+# The hub image with its backing services and a fake OIDC issuer: `bash test/container-oidc.sh`.
+# A distinct project name keeps it apart from compose.test.yml's stack.
+name: okf-hub-e2e
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: test
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      retries: 30
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    command: azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
+  issuer:
+    image: node:22-slim
+    command: ["node", "/test/fake-oidc.mjs", "8792", "0.0.0.0"]
+    volumes:
+      - ./test/fake-oidc.mjs:/test/fake-oidc.mjs:ro
+    ports:
+      - "${FAKE_OIDC_PORT:-58792}:8792"
+  hub:
+    build: .
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      azurite:
+        condition: service_started
+      issuer:
+        condition: service_started
+    environment:
+      OIDC_ISSUER: http://issuer.test/realms/test
+      OIDC_JWKS_URL: http://issuer:8792/certs
+      OIDC_AUDIENCE: http://okf.test
+      OIDC_GRANTS: '[{"bundle":"orgs/oidc-{actor}","access":"write"},{"role":"knowledge-reader","bundle":"orgs/*","access":"read"}]'
+      VAULT_MASTER_KEY_HEX: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+      DATABASE_URL: postgres://postgres:test@postgres:5432/postgres
+      AZURE_STORAGE_CONNECTION_STRING: DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;
+    ports:
+      - "${HUB_PORT:-57878}:7878"

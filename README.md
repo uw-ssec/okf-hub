@@ -54,7 +54,7 @@ npm run test:integration    # against compose.test.yml's Postgres and Azurite
 
 `npm run test:integration` needs the Postgres and Azurite services in `compose.test.yml` (`docker-compose -f compose.test.yml up -d`). Never point tests at a real deployment.
 
-- `bash test/mcp-oidc.sh` (OIDC bundles against a local fake provider)
+End to end (the built image, Postgres, Azurite and a fake OIDC issuer): `docker compose up -d --build && bash test/container-oidc.sh`, then `docker compose down -v`. The script ends with `failed: 0` when it passes; set `COMPOSE=docker-compose` where there is no compose plugin.
 
 ## Remote MCP
 

@@ -1,12 +1,12 @@
 // Stand-in for an OIDC provider (Keycloak), for local tests only: publishes a JWKS and mints RS256
 // access tokens with whatever claims a test asks for.
-// Usage: node test/fake-oidc.mjs <port>
+// Usage: node test/fake-oidc.mjs <port> [host]   (host defaults to 127.0.0.1)
 //   GET  /certs                       the JWKS
 //   POST /token  {claims, key?}       a signed token; key "other" signs with a key not in the JWKS
 import http from "node:http";
 import { generateKeyPairSync, createSign } from "node:crypto";
 
-const [, , port] = process.argv;
+const [, , port, host = "127.0.0.1"] = process.argv;
 const good = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const other = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const jwk = { ...good.publicKey.export({ format: "jwk" }), kid: "test-key", alg: "RS256", use: "sig" };
@@ -45,4 +45,4 @@ http
     res.writeHead(404);
     res.end();
   })
-  .listen(Number(port), "127.0.0.1");
+  .listen(Number(port), host);

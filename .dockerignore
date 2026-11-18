@@ -1,7 +1,9 @@
 node_modules
+dist
 .wrangler
 .work
 .git
 .dev.vars*
 .env*
+.superpowers
 test
