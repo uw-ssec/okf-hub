@@ -1,10 +1,10 @@
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { checkHealth, createHandler } from "../src/app.js";
 import { vaultIdFor } from "../src/bundles.js";
 import type { HubConfig } from "../src/config.js";
 import type { EngineHost } from "../src/engine-host.js";
 import { __setEngineExitedForTest } from "../src/engine/runtime.js";
-import { SERVER_INSTRUCTIONS } from "../src/mcp.js";
+import { SERVER_INSTRUCTIONS, TOOL_FAILED } from "../src/mcp.js";
 import { JwksCache, oidcConfig, type OidcConfig } from "../src/oidc.js";
 
 const ENV = {
@@ -47,7 +47,10 @@ beforeAll(async () => {
   jwks = new JwksCache(async () => ({ keys: [{ ...jwk, kid: "k1", alg: "RS256", use: "sig" }] }));
 });
 
-afterEach(() => __setEngineExitedForTest(null));
+afterEach(() => {
+  __setEngineExitedForTest(null);
+  vi.restoreAllMocks();
+});
 
 type Call = { name: string; args: Record<string, unknown>; actor: string; vaultId: string };
 
@@ -143,6 +146,21 @@ describe("/mcp", () => {
     expect(response.status).toBe(401);
   });
 
+  it("a refused bearer is logged with its reason, never the token", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const bearer = await token({ aud: "http://elsewhere" });
+    expect((await app().handle(mcpRequest("tools/list", {}, { bearer }))).status).toBe(401);
+    expect((await app().handle(mcpRequest("tools/list", {}))).status).toBe(401);
+    expect((await app().handle(new Request("http://hub.test/v1/snapshot?bundle=orgs/oidc-acme", { headers: { Authorization: `Bearer ${await token({ okf_org: undefined })}` } }))).status).toBe(401);
+    const lines = logged.mock.calls.map((args) => String(args[0]));
+    expect(lines.map((l) => JSON.parse(l))).toEqual([
+      { oidc: "rejected", reason: "aud", path: "/mcp" },
+      { oidc: "rejected", reason: "no_bearer", path: "/mcp" },
+      { oidc: "rejected", reason: "no_grants", path: "/v1/snapshot" },
+    ]);
+    expect(lines.join("\n")).not.toContain(bearer.split(".")[1]);
+  });
+
   it("mcp without the event-stream Accept header is 406", async () => {
     const response = await app().handle(mcpRequest("tools/list", {}, { bearer: await token(), accept: "application/json" }));
     expect(response.status).toBe(406);
@@ -191,6 +209,34 @@ describe("/mcp", () => {
     expect(called.status).toBe(200);
     expect(((await rpcBody(called)).result?.content as { text: string }[])[0].text).toBe("ok");
     expect(calls).toEqual([{ name: "okf_search", args: { query: "door" }, actor: "okf-org-acme", vaultId: await vaultIdFor("orgs/oidc-acme") }]);
+  });
+
+  it("a call failing inside the hub is logged; the caller sees only that it failed", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const host = { callTool: async () => { throw new Error("password authentication failed for user okf_hub"); } } as unknown as EngineHost;
+    const handle = createHandler({ config, host, health: async () => {}, jwks });
+    const call = await rpcBody(await handle(mcpRequest("tools/call", { name: "okf_search", arguments: { query: "x" } }, { bearer: await token() })));
+    expect(call.result?.isError).toBe(true);
+    expect(call.result?.content).toEqual([{ type: "text", text: TOOL_FAILED }]);
+    expect(logged.mock.calls.map((args) => JSON.parse(String(args[0])))).toContainEqual(expect.objectContaining({ mcp: "tool_error", tool: "okf_search", bundle: "orgs/oidc-acme" }));
+  });
+
+  it("a request the MCP handler rejects is logged", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    // A 2026-07-28 request whose Mcp-Method header contradicts its body.
+    const meta = {
+      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+      "io.modelcontextprotocol/clientInfo": { name: "test", version: "1" },
+      "io.modelcontextprotocol/clientCapabilities": {},
+    };
+    const request = new Request("http://hub.test/mcp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: MCP_ACCEPT, "MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "tools/call", Authorization: `Bearer ${await token()}` },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: { _meta: meta } }),
+    });
+    const response = await app().handle(request);
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(logged.mock.calls.map((args) => JSON.parse(String(args[0])))).toContainEqual(expect.objectContaining({ mcp: "handler_error" }));
   });
 
   it("an org naming another org's bundle gets Access denied", async () => {

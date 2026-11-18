@@ -29,6 +29,9 @@ const BUNDLE_ARG = z
 
 const denied = (text: string): ToolResult => ({ isError: true, content: [{ type: "text", text: `Access denied: ${text}` }] });
 
+/** What a caller sees when a call fails inside the hub; the cause (hosts, addresses, Postgres errors) goes to the log only. */
+export const TOOL_FAILED = "The hub could not complete this call. Try again; if it keeps failing, ask the hub's operator to check its logs.";
+
 /**
  * One tool call for an OIDC caller: the bundle comes from the call's `bundle` argument, else the
  * request's `?bundle=`, else the token's only bundle; the token's grant for it decides the access.
@@ -47,10 +50,15 @@ export async function bundleCall(
   const access = isBundleName(bundle) ? accessFor(grants, bundle) : null;
   if (!access) return denied(`this connection may not use the bundle "${bundle}".`);
   if (access === "read" && !READ_TOOLS.has(tool)) return denied(`${tool} changes the bundle "${bundle}", and this connection may only read it.`);
-  const vaultId = await vaultIdFor(bundle);
-  const engine: Engine = { callTool: (name, a, actor) => host.callTool(name, a, actor, vaultId) };
-  const result = await guardedCall(engine, tool, rest, { ...policy, access: access === "write" ? "full" : "read" });
-  return nameBundle(result, bundle);
+  try {
+    const vaultId = await vaultIdFor(bundle);
+    const engine: Engine = { callTool: (name, a, actor) => host.callTool(name, a, actor, vaultId) };
+    const result = await guardedCall(engine, tool, rest, { ...policy, access: access === "write" ? "full" : "read" });
+    return nameBundle(result, bundle);
+  } catch (err) {
+    console.error(JSON.stringify({ mcp: "tool_error", app: policy.clientName, bundle, tool, error: String(err) }));
+    return { isError: true, content: [{ type: "text", text: TOOL_FAILED }] };
+  }
 }
 
 /** okf reports where it wrote as its internal directory; a remote caller should see the bundle's name. */
@@ -91,7 +99,10 @@ function sharedHandler(): McpHttpHandler {
       const { host, policy, requestBundle } = authInfo?.extra as McpRequestContext;
       return createServer(host, policy, requestBundle);
     },
-    { responseMode: "json" },
+    {
+      responseMode: "json",
+      onerror: (err) => console.error(JSON.stringify({ mcp: "handler_error", error: String(err) })),
+    },
   );
   return mcpHandler;
 }

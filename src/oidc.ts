@@ -12,6 +12,9 @@ import type { webcrypto } from "node:crypto";
 
 export type OidcConfig = { issuer: string; jwksUrl: string; audience: string; actorClaim: string; rules: GrantRule[] };
 export type OidcCaller = { clientName: string; grants: BundleGrant[] };
+/** Why a token was refused, for the operator's log; never the token itself. */
+export type RejectReason = "malformed" | "alg" | "jwks_unavailable" | "kid" | "sig" | "iss" | "aud" | "exp" | "nbf" | "no_grants";
+export type OnReject = (reason: RejectReason) => void;
 type Claims = Record<string, unknown>;
 type Jwk = webcrypto.JsonWebKey & { kid?: string; alg?: string; use?: string };
 
@@ -96,23 +99,33 @@ function audienceIncludes(aud: unknown, audience: string): boolean {
 }
 
 /** The verified claims of a token, or null if it is not a valid token for this hub. Never throws for a bad token. */
-export async function verifyToken(token: string, config: OidcConfig, jwks: JwksCache = sharedJwks, nowS = Date.now() / 1000): Promise<Claims | null> {
+export async function verifyToken(
+  token: string,
+  config: OidcConfig,
+  jwks: JwksCache = sharedJwks,
+  nowS = Date.now() / 1000,
+  onReject?: OnReject,
+): Promise<Claims | null> {
+  const reject = (reason: RejectReason) => {
+    onReject?.(reason);
+    return null;
+  };
   const parts = token.split(".");
-  if (parts.length !== 3) return null;
+  if (parts.length !== 3) return reject("malformed");
   const header = b64urlJson(parts[0]);
   const claims = b64urlJson(parts[1]);
-  if (!header || !claims || typeof header.alg !== "string") return null;
+  if (!header || !claims || typeof header.alg !== "string") return reject("malformed");
   const params = ALGORITHMS[header.alg];
-  if (!params) return null; // also refuses "none" and HMAC algorithms
+  if (!params) return reject("alg"); // also refuses "none" and HMAC algorithms
   let jwk: Jwk | null;
   try {
     jwk = await jwks.key(config.jwksUrl, typeof header.kid === "string" ? header.kid : undefined, header.alg);
   } catch (err) {
     // The provider is unreachable and no keys are cached: no token can be checked, so none is accepted.
     console.error(JSON.stringify({ oidc: "jwks_unavailable", error: String(err) }));
-    return null;
+    return reject("jwks_unavailable");
   }
-  if (!jwk) return null;
+  if (!jwk) return reject("kid");
   let valid = false;
   try {
     const { kid: _kid, alg: _alg, use: _use, key_ops: _ops, x5c: _x5c, ...material } = jwk as Jwk & { x5c?: unknown };
@@ -121,13 +134,13 @@ export async function verifyToken(token: string, config: OidcConfig, jwks: JwksC
     const verifyParams = params.name === "ECDSA" ? { name: "ECDSA", hash: "SHA-256" } : params;
     valid = await crypto.subtle.verify(verifyParams, key, signature, new TextEncoder().encode(`${parts[0]}.${parts[1]}`));
   } catch {
-    return null;
+    return reject("sig");
   }
-  if (!valid) return null;
-  if (claims.iss !== config.issuer) return null;
-  if (!audienceIncludes(claims.aud, config.audience)) return null;
-  if (typeof claims.exp !== "number" || claims.exp + CLOCK_SKEW_S < nowS) return null;
-  if (typeof claims.nbf === "number" && claims.nbf - CLOCK_SKEW_S > nowS) return null;
+  if (!valid) return reject("sig");
+  if (claims.iss !== config.issuer) return reject("iss");
+  if (!audienceIncludes(claims.aud, config.audience)) return reject("aud");
+  if (typeof claims.exp !== "number" || claims.exp + CLOCK_SKEW_S < nowS) return reject("exp");
+  if (typeof claims.nbf === "number" && claims.nbf - CLOCK_SKEW_S > nowS) return reject("nbf");
   return claims;
 }
 
@@ -138,10 +151,13 @@ export function realmRoles(claims: Claims): string[] {
 }
 
 /** Who a token is and what it may touch, or null if it is not a valid token or grants nothing. */
-export async function resolveCaller(token: string, config: OidcConfig, jwks?: JwksCache): Promise<OidcCaller | null> {
-  const claims = await verifyToken(token, config, jwks);
+export async function resolveCaller(token: string, config: OidcConfig, jwks?: JwksCache, onReject?: OnReject): Promise<OidcCaller | null> {
+  const claims = await verifyToken(token, config, jwks, undefined, onReject);
   if (!claims) return null;
   const grants = grantsFor(config.rules, claims[config.actorClaim], realmRoles(claims));
-  if (!grants.length) return null;
+  if (!grants.length) {
+    onReject?.("no_grants");
+    return null;
+  }
   return { clientName: sanitizeActor(claims.azp ?? claims.client_id ?? claims.sub), grants };
 }

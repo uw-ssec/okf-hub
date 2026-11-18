@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { bundleCall, nameBundle } from "../src/mcp";
+import { describe, expect, it, vi } from "vitest";
+import { bundleCall, nameBundle, TOOL_FAILED } from "../src/mcp";
 import { vaultIdFor } from "../src/bundles";
 import type { Policy } from "../src/policy";
 import type { EngineHost } from "../src/engine-host.js";
@@ -59,6 +59,25 @@ describe("bundleCall", () => {
     const result = await bundleCall(host, "okf_search", { query: "x" }, reader, null);
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toMatch(/no default bundle/);
+  });
+  it("logs a failing call for the operator and tells the caller only that it failed", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const host = {
+      callTool: async () => {
+        throw new Error("connect ECONNREFUSED 10.0.0.7:5432");
+      },
+    } as unknown as EngineHost;
+    const result = await bundleCall(host, "okf_search", { query: "x" }, org, null);
+    expect(result).toEqual({ isError: true, content: [{ type: "text", text: TOOL_FAILED }] });
+    expect(logged).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(logged.mock.calls[0][0]))).toEqual({
+      mcp: "tool_error",
+      app: "okf-org-acme",
+      bundle: "orgs/oidc-acme",
+      tool: "okf_search",
+      error: "Error: connect ECONNREFUSED 10.0.0.7:5432",
+    });
+    logged.mockRestore();
   });
 });
 

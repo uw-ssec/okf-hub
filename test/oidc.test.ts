@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { JwksCache, oidcConfig, resolveCaller, verifyToken, type OidcConfig } from "../src/oidc";
+import { JwksCache, oidcConfig, resolveCaller, verifyToken, type OidcConfig, type RejectReason } from "../src/oidc";
 
 const GRANTS = JSON.stringify([
   { bundle: "orgs/oidc-{actor}", access: "write" },
@@ -55,23 +55,35 @@ describe("verifyToken", () => {
     expect(claims?.okf_org).toBe("acme");
   });
 
-  it("refuses the wrong issuer, audience, expiry, signer, or algorithm", async () => {
-    const cases = [
-      await sign(good({ iss: "http://evil/realms/litellm" })),
-      await sign(good({ aud: "account" })),
-      await sign(good({ aud: undefined })),
-      await sign(good({ exp: NOW - 120 })),
-      await sign(good({ exp: undefined })),
-      await sign(good({ nbf: NOW + 120 })),
-      await sign(good(), { key: other.privateKey }),
-      await sign(good(), { header: { alg: "none" } }),
-      await sign(good(), { header: { alg: "HS256" } }),
-      await sign(good(), { header: { kid: "unknown" } }),
-      "not-a-token",
-      "a.b.c",
-      "",
+  it("refuses the wrong issuer, audience, expiry, signer, or algorithm, and says why", async () => {
+    const cases: [string, RejectReason][] = [
+      [await sign(good({ iss: "http://evil/realms/litellm" })), "iss"],
+      [await sign(good({ aud: "account" })), "aud"],
+      [await sign(good({ aud: undefined })), "aud"],
+      [await sign(good({ exp: NOW - 120 })), "exp"],
+      [await sign(good({ exp: undefined })), "exp"],
+      [await sign(good({ nbf: NOW + 120 })), "nbf"],
+      [await sign(good(), { key: other.privateKey }), "sig"],
+      [await sign(good(), { header: { alg: "none" } }), "alg"],
+      [await sign(good(), { header: { alg: "HS256" } }), "alg"],
+      [await sign(good(), { header: { kid: "unknown" } }), "kid"],
+      ["not-a-token", "malformed"],
+      ["a.b.c", "malformed"],
+      ["", "malformed"],
     ];
-    for (const token of cases) expect(await verifyToken(token, config, jwks, NOW)).toBeNull();
+    for (const [token, reason] of cases) {
+      const reasons: RejectReason[] = [];
+      expect(await verifyToken(token, config, jwks, NOW, (r) => reasons.push(r))).toBeNull();
+      expect(reasons, `token ${token.slice(0, 20)}...`).toEqual([reason]);
+    }
+    expect(await verifyToken(await sign(good()), config, jwks, NOW, (r) => { throw new Error(`rejected a good token: ${r}`); })).not.toBeNull();
+  });
+
+  it("refuses every token while the provider's keys cannot be fetched, and says why", async () => {
+    const down = new JwksCache(async () => { throw new Error("connect ECONNREFUSED"); });
+    const reasons: RejectReason[] = [];
+    expect(await verifyToken(await sign(good()), config, down, NOW, (r) => reasons.push(r))).toBeNull();
+    expect(reasons).toEqual(["jwks_unavailable"]);
   });
 
   it("refuses a token whose payload was changed after signing", async () => {
@@ -88,7 +100,9 @@ describe("resolveCaller", () => {
 
   it("refuses a valid token that grants nothing (a person's token with no org claim)", async () => {
     const token = await sign(good({ exp: Date.now() / 1000 + 300, okf_org: undefined, azp: "console" }));
-    expect(await resolveCaller(token, config, jwks)).toBeNull();
+    const reasons: RejectReason[] = [];
+    expect(await resolveCaller(token, config, jwks, (r) => reasons.push(r))).toBeNull();
+    expect(reasons).toEqual(["no_grants"]);
   });
 
   it("gives the reader role read access to every org", async () => {
