@@ -13,6 +13,10 @@ services:
   azurite:
     image: mcr.microsoft.com/azure-storage/azurite
     command: azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
+    healthcheck: # the blob port accepts connections
+      test: ["CMD", "node", "-e", "require('net').connect(10000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 2s
+      retries: 30
   issuer:
     image: node:22-slim
     command: ["node", "/test/fake-oidc.mjs", "8792", "0.0.0.0"]
@@ -20,8 +24,14 @@ services:
       - ./test/fake-oidc.mjs:/test/fake-oidc.mjs:ro
     ports:
       - "${FAKE_OIDC_PORT:-58792}:8792"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8792/certs').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      retries: 30
   hub:
     build: .
+    # A start that loses a race with its backing services exits; try again rather than fail the run.
+    restart: on-failure
     read_only: true
     tmpfs:
       - /tmp
@@ -29,9 +39,9 @@ services:
       postgres:
         condition: service_healthy
       azurite:
-        condition: service_started
+        condition: service_healthy
       issuer:
-        condition: service_started
+        condition: service_healthy
     environment:
       OIDC_ISSUER: http://issuer.test/realms/test
       OIDC_JWKS_URL: http://issuer:8792/certs

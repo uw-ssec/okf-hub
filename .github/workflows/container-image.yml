@@ -17,6 +17,16 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # The engine artifacts are not in git. Take them from the Dockerfile's engine stage, so the tests run
+      # against the exact engine the image ships (the e2e build below reuses the cached stage).
+      - name: Build the okf engine
+        run: |
+          docker build --target engine -t okf-hub-engine:ci .
+          id="$(docker create okf-hub-engine:ci)"
+          docker cp "$id:/out/okf-engine.wasm" src/engine/okf-engine.wasm
+          docker cp "$id:/out/wasm_exec.js" src/engine/wasm_exec.js
+          docker cp "$id:/out/okf-tools.json" src/okf-tools.json
+          docker rm "$id"
       - run: npm ci
       - run: npx tsc -p .
       - run: npx vitest run
@@ -47,6 +57,8 @@ jobs:
 
   publish:
     needs: test
+    # A manual run from another branch tests it but never publishes a container-<sha> tag.
+    if: github.ref == 'refs/heads/container'
     runs-on: ubuntu-latest
     permissions:
       contents: read
