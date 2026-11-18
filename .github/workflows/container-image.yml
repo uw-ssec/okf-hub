@@ -24,8 +24,8 @@ jobs:
         run: |
           docker compose -f compose.test.yml up -d
           for _ in $(seq 60); do
-            docker compose -f compose.test.yml exec -T postgres pg_isready -U postgres \
-              && (exec 3<>/dev/tcp/127.0.0.1/55100) 2>/dev/null && exit 0
+            docker compose -f compose.test.yml exec -T postgres pg_isready -h 127.0.0.1 -U postgres \
+              && curl -s -o /dev/null http://127.0.0.1:55100/ && exit 0
             sleep 1
           done
           echo "integration services did not become ready"
