@@ -6,6 +6,7 @@ import type { EngineHost } from "../src/engine-host.js";
 import { __setEngineExitedForTest } from "../src/engine/runtime.js";
 import { SERVER_INSTRUCTIONS, TOOL_FAILED } from "../src/mcp.js";
 import { JwksCache, oidcConfig, type OidcConfig } from "../src/oidc.js";
+import { Readiness } from "../src/readiness.js";
 
 const ENV = {
   OIDC_ISSUER: "http://auth.localhost:8000/realms/litellm",
@@ -54,7 +55,7 @@ afterEach(() => {
 
 type Call = { name: string; args: Record<string, unknown>; actor: string; vaultId: string };
 
-function app(health: () => Promise<void> = async () => {}) {
+function app(health: () => Promise<void> = async () => {}, readiness?: { readonly ready: boolean }) {
   const calls: Call[] = [];
   const snapshots: string[] = [];
   const host = {
@@ -67,7 +68,7 @@ function app(health: () => Promise<void> = async () => {}) {
       return { head: "c1", files: { "facts/x.md": { content: "x", version: "abc" } } };
     },
   } as unknown as EngineHost;
-  return { handle: createHandler({ config, host, health, jwks }), calls, snapshots };
+  return { handle: createHandler({ config, host, health, jwks, readiness }), calls, snapshots };
 }
 
 const MCP_ACCEPT = "application/json, text/event-stream";
@@ -117,6 +118,67 @@ describe("/healthz", () => {
     const { handle } = app(() => checkHealth({ heads: ok, blobs: ok }));
     expect((await handle(new Request("http://hub.test/healthz"))).status).toBe(200);
     __setEngineExitedForTest(() => true);
+    expect((await handle(new Request("http://hub.test/healthz"))).status).toBe(503);
+  });
+});
+
+describe("before the stores are ready", () => {
+  const snapshotRequest = (bearer?: string) =>
+    new Request("http://hub.test/v1/snapshot?bundle=orgs/oidc-acme", { headers: bearer ? { Authorization: `Bearer ${bearer}` } : {} });
+
+  it("healthz is 200 starting, without asking the stores", async () => {
+    const health = vi.fn(async () => { throw new Error("postgres: role does not exist"); });
+    const response = await app(health, new Readiness()).handle(new Request("http://hub.test/healthz"));
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("starting");
+    expect(health).not.toHaveBeenCalled();
+  });
+
+  it("mcp and snapshot are 503 starting for a valid token, and the engine is not used", async () => {
+    const { handle, calls, snapshots } = app(async () => {}, new Readiness());
+    const call = await handle(mcpRequest("tools/call", { name: "okf_search", arguments: { query: "x" } }, { bearer: await token() }));
+    expect(call.status).toBe(503);
+    expect(call.headers.get("Retry-After")).toBe("5");
+    expect(await call.json()).toEqual({ error: "starting", error_description: "The hub is starting; try again shortly." });
+    const snap = await handle(snapshotRequest(await readerToken()));
+    expect(snap.status).toBe(503);
+    expect((await snap.json()).error).toBe("starting");
+    expect(calls).toEqual([]);
+    expect(snapshots).toEqual([]);
+  });
+
+  it("a caller without a valid token still gets 401", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { handle } = app(async () => {}, new Readiness());
+    expect((await handle(mcpRequest("tools/list", {}))).status).toBe(401);
+    expect((await handle(mcpRequest("tools/list", {}, { bearer: await token({ aud: "http://elsewhere" }) }))).status).toBe(401);
+    expect((await handle(snapshotRequest())).status).toBe(401);
+  });
+
+  it("an unknown path is still 404", async () => {
+    expect((await app(async () => {}, new Readiness()).handle(new Request("http://hub.test/api/v1/x"))).status).toBe(404);
+  });
+
+  it("once ready, healthz checks the stores and calls reach the engine", async () => {
+    let down = false;
+    const readiness = new Readiness();
+    const { handle, calls, snapshots } = app(async () => { if (down) throw new Error("postgres down"); }, readiness);
+    const bearer = await token();
+    expect((await handle(mcpRequest("tools/call", { name: "okf_search", arguments: { query: "x" } }, { bearer }))).status).toBe(503);
+
+    readiness.markReady();
+    const health = await handle(new Request("http://hub.test/healthz"));
+    expect(health.status).toBe(200);
+    expect(await health.text()).toBe("ok");
+    const call = await rpcBody(await handle(mcpRequest("tools/call", { name: "okf_search", arguments: { query: "x" } }, { bearer })));
+    expect((call.result?.content as { text: string }[])[0].text).toBe("ok");
+    expect(calls).toHaveLength(1);
+    expect((await handle(snapshotRequest(await readerToken()))).status).toBe(200);
+    expect(snapshots).toHaveLength(1);
+
+    // Ready is for good: a later outage is a 503 from healthz, not "starting" again.
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    down = true;
     expect((await handle(new Request("http://hub.test/healthz"))).status).toBe(503);
   });
 });

@@ -14,7 +14,7 @@ It serves exactly three paths; every other path, the hub REST API (`/api/v1/...`
 
 - `POST /mcp`: the six okf tools for a bundle, as a stateless MCP server (Streamable HTTP; the 2025 protocol revisions and 2026-07-28).
 - `GET /v1/snapshot?bundle=<name>`: every file of a bundle, for a token that may read it.
-- `GET /healthz`: `200 ok` while Postgres and Blob Storage answer and the okf engine is running, `503` otherwise.
+- `GET /healthz`: `200 ok` while Postgres and Blob Storage answer and the okf engine is running, `503` otherwise; `200 starting` before the hub has first prepared its stores.
 
 Callers present an access token from an OIDC provider such as Keycloak as the bearer; nothing else is accepted (no static tokens, no GitHub OAuth). The tokens' grants decide which bundles they reach, as described in [Bundles for an OIDC provider's callers](#bundles-for-an-oidc-providers-callers). Vault heads live in Postgres and blobs in Azure Blob Storage, under the same `vaults/<id>/blobs/...` and `vaults/<id>/refs/...` keys as on `main`.
 
@@ -32,6 +32,8 @@ The service refuses to start without its required settings:
 | `OIDC_ACTOR_CLAIM` | no | The claim naming the caller's organization. Default `okf_org`. |
 | `BLOB_CONTAINER` | no | The blob container, created on start if missing. Default `okf-hub`. |
 | `PORT` | no | The HTTP port. Default `7878`. |
+
+The hub listens as soon as its settings load and does not wait for Postgres or Blob Storage: it creates its tables and blob container in the background, retrying every 1 s to 30 s and logging each failed attempt as `{"okfHub":"init_retry",...}` and success as `{"okfHub":"ready",...}`, so a first deploy can create its database role after the hub has started. Until then `/healthz` answers `200 starting`, and `/mcp` and `/v1/snapshot` answer `503 {"error":"starting"}` to a valid token (`401` to any other caller).
 
 ```bash
 npm ci

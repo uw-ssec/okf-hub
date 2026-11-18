@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # End to end against the compose stack (compose.yml): OIDC sign-in and named bundles. Each organization's
 # token reaches its own bundle only, a reader role reads every bundle and writes none, bundles stay apart while
-# one engine serves them all, and the container restarts clean.
+# one engine serves them all, the container restarts clean, and a hub whose database role does not exist yet
+# serves `starting` until it does, then turns ready.
 set -euo pipefail
 ROOTDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE="${COMPOSE:-docker compose}"
@@ -15,8 +16,9 @@ FAKE="http://127.0.0.1:${FAKE_OIDC_PORT:-58792}"
 # These must match OIDC_ISSUER and OIDC_AUDIENCE in compose.yml.
 ISSUER="http://issuer.test/realms/test"
 
-for _ in $(seq 60); do curl -sf "$HUB/healthz" >/dev/null && break; sleep 1; done
-curl -sf "$HUB/healthz" >/dev/null || { echo "hub did not become healthy"; exit 1; }
+# /healthz answers `200 starting` before the stores are prepared, so wait for `ok`.
+wait_ready() { for _ in $(seq "${2:-60}"); do [ "$(curl -s "$1/healthz")" = ok ] && return 0; sleep 1; done; return 1; }
+wait_ready "$HUB" || { echo "hub did not become healthy"; exit 1; }
 
 token() { curl -s -X POST "$FAKE/token" -d "{\"claims\":$1${2:+,\"key\":\"$2\"}}"; }
 org_token() { token "{\"iss\":\"$ISSUER\",\"aud\":\"http://okf.test\",\"azp\":\"okf-org-$1\",\"okf_org\":\"$1\"}"; }
@@ -73,8 +75,31 @@ check "snapshot without a token -> 401" '[ "$(curl -s -o /dev/null -w "%{http_co
 
 echo "== restart"
 $COMPOSE -f "$ROOTDIR/compose.yml" restart hub >/dev/null 2>&1
-for _ in $(seq 60); do curl -sf "$HUB/healthz" >/dev/null && break; sleep 1; done
+wait_ready "$HUB" || true
 check "the container restarts clean" 'call "$ACME" okf_show "{\"concept_id\":\"facts/lab-door\"}" | text | grep -q "$MARK"'
+
+echo "== a hub whose database role does not exist yet (a first deploy)"
+# A second hub on its own role, database and blob container; the role and database are created only after it starts.
+LATE_NAME=okf-hub-e2e-late
+LATE="http://127.0.0.1:${LATE_HUB_PORT:-57879}"
+LATE_PW="late-$MARK"
+psql_admin() { $COMPOSE -f "$ROOTDIR/compose.yml" exec -T postgres psql -q -U postgres -v ON_ERROR_STOP=1 "$@" >/dev/null; }
+docker rm -f "$LATE_NAME" >/dev/null 2>&1 || true
+trap 'docker rm -f "$LATE_NAME" >/dev/null 2>&1 || true' EXIT
+psql_admin -c "SET client_min_messages = warning" -c "DROP DATABASE IF EXISTS okf_hub_late" -c "DROP ROLE IF EXISTS okf_hub_late"
+$COMPOSE -f "$ROOTDIR/compose.yml" run -d --no-deps --name "$LATE_NAME" -p "${LATE_HUB_PORT:-57879}:7878" \
+  -e "DATABASE_URL=postgres://okf_hub_late:$LATE_PW@postgres:5432/okf_hub_late" -e BLOB_CONTAINER=okf-hub-late hub >/dev/null
+for _ in $(seq 60); do [ "$(curl -s "$LATE/healthz")" = starting ] && break; sleep 1; done
+late_call() { node "$ROOTDIR/test/mcp-call.mjs" "$LATE/mcp" "$1" tools/call "$2"; }
+check "healthz is 200 starting while the role is missing" '[ "$(curl -s -w " %{http_code}" "$LATE/healthz")" = "starting 200" ]'
+check "an org token gets 503 starting" 'late_call "$ACME" "{\"name\":\"okf_search\",\"arguments\":$SEARCH}" | json "d[\"status\"], d[\"body\"][\"error\"]" | grep -qx "503 starting"'
+check "no token still gets 401" '[ "$(node "$ROOTDIR/test/mcp-call.mjs" "$LATE/mcp" - tools/list | status)" = 401 ]'
+check "the failed attempts are logged, without the password" 'docker logs "$LATE_NAME" 2>&1 | grep -q "\"okfHub\":\"init_retry\"" && ! docker logs "$LATE_NAME" 2>&1 | grep -q "$LATE_PW"'
+psql_admin -c "CREATE ROLE okf_hub_late LOGIN PASSWORD '$LATE_PW'" -c "CREATE DATABASE okf_hub_late OWNER okf_hub_late"
+check "it turns ready once the role exists" 'wait_ready "$LATE" 60'
+check "ready is logged" 'docker logs "$LATE_NAME" 2>&1 | grep -q "\"okfHub\":\"ready\""'
+check "an org call then works" 'late_call "$ACME" "{\"name\":\"okf_create\",\"arguments\":{\"concept_id\":\"facts/late\",\"type\":\"Fact\",\"title\":\"Late\",\"description\":\"Late\",\"body\":\"Late $MARK\"}}" | text | grep -q "in orgs/oidc-acme$" && late_call "$ACME" "{\"name\":\"okf_show\",\"arguments\":{\"concept_id\":\"facts/late\"}}" | text | grep -q "Late $MARK"'
+docker rm -f "$LATE_NAME" >/dev/null 2>&1 || true
 
 echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]
