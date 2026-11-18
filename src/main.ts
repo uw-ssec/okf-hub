@@ -34,6 +34,9 @@ const host = new EngineHost({ heads, blobs }, config.masterKeyHex);
 const handle = createHandler({ config, host, health: () => checkHealth({ heads, blobs }) });
 
 const server = createServer(nodeListener(handle));
+// Outlive the proxy's idle upstream connections (Envoy, Azure's front ends), so it never reuses one the hub has closed.
+server.keepAliveTimeout = 65_000;
+server.headersTimeout = 66_000;
 server.listen(config.port, () => console.log(JSON.stringify({ okfHub: "listening", port: config.port })));
 
 process.once("SIGTERM", () => {

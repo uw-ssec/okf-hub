@@ -5,7 +5,10 @@ export class AzureBlobStore implements BlobStore {
   private readonly container: ContainerClient;
 
   constructor(connectionString: string, container: string) {
-    this.container = new ContainerClient(connectionString, container);
+    // A per-try timeout and short back-off, so an outage fails requests and /healthz in seconds, not minutes.
+    this.container = new ContainerClient(connectionString, container, {
+      retryOptions: { maxTries: 3, tryTimeoutInMs: 15_000, maxRetryDelayInMs: 2_000 },
+    });
   }
 
   async ensureContainer(): Promise<void> {

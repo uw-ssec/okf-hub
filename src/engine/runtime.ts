@@ -32,10 +32,10 @@ let started: Promise<void> | undefined;
 let exited = false;
 
 /**
- * The Go runtime, its filesystem and its one open vault are per isolate, and Durable Objects for
- * different vaults can share an isolate. So the lock and the record of which vault is loaded live
- * here, not on the object: every use of the engine runs under `engineExclusive`, and a vault that is
- * not the loaded one is reloaded from scratch before it is touched.
+ * The Go runtime, its filesystem and its one open vault are per process, and every vault shares
+ * them. So the lock and the record of which vault is loaded live here: every use of the engine runs
+ * under `engineExclusive`, and a vault that is not the loaded one is reloaded from scratch before it
+ * is touched.
  */
 export const engineExclusive = serialQueue();
 let loadedVault = "";
@@ -104,7 +104,7 @@ function withConsoleStdio(fs: FsLike): FsLike {
 }
 
 /**
- * Start the Go runtime once per isolate. Go's syscall/js captures
+ * Start the Go runtime once per process. Go's syscall/js captures
  * globalThis.fs at startup, so the memfs object is installed first and never
  * replaced; resets clear the volume instead.
  */

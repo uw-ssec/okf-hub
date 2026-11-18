@@ -2,7 +2,7 @@ import type { ToolResult } from "./engine-host.js";
 import { checkInput, engineArgs, type Policy } from "./policy.js";
 import { filterResult } from "./policy-output.js";
 
-/** The slice of the VaultEngine Durable Object a tool call needs. */
+/** The slice of the engine host a tool call needs. */
 export type Engine = { callTool(name: string, args: Record<string, unknown>, actor: string): Promise<ToolResult> };
 
 /** One tool call under a grant's policy: refuse before okf runs, filter what comes back. */

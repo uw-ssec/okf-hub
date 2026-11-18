@@ -10,8 +10,6 @@ The Cloudflare Workers version, which also speaks the hub REST API to the `okf` 
 
 ## Using it
 
-This branch (`container`) runs the hub as one Node service in a container. The Cloudflare version lives on `main`.
-
 It serves exactly three paths; every other path, the hub REST API (`/api/v1/...`) included, is `404`:
 
 - `POST /mcp`: the six okf tools for a bundle, as a stateless MCP server (Streamable HTTP; the 2025 protocol revisions and 2026-07-28).
@@ -101,4 +99,4 @@ All settings come from the environment; see the table under [Using it](#using-it
 
 A hub's state is its Postgres database (the `vault_head` and `vault_history` tables) and its blob container. Back up both with the platform's own tools, such as Postgres point-in-time restore and Blob Storage soft delete or versioning, and keep `VAULT_MASTER_KEY_HEX` with them.
 
-Every accepted commit also writes an append-only ref, `vaults/<id>/refs/<seq>-<commit>.json`, beside the blobs. So the blob container alone holds every vault's history: to restore a vault from it, copy its objects back and set its `vault_head` row to the commit of its highest-numbered ref.
+Every accepted commit also writes an append-only ref, `vaults/<id>/refs/<seq>-<commit>.json`, beside the blobs. So the blob container alone holds every vault's history: to restore a vault from it, copy its objects back, then restore both tables. Set its `vault_head` row to the commit of its highest-numbered ref, and give `vault_history` one row per ref, in `seq` order, from the ref's `commit`, `previous` and `accepted_at`: the next commit's `seq` is the vault's `count(*)` in `vault_history`, so a `vault_head` restored alone would number new refs from 1 again.
