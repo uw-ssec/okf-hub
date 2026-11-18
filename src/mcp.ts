@@ -8,7 +8,7 @@ import { rpcSummary } from "./rpc-summary";
 import { guardedCall, type Engine } from "./guarded-call";
 import { PolicyError, policyFromProps, READ_TOOLS, toolAllowed, type Policy } from "./policy";
 import { accessFor, defaultBundle, isBundleName, vaultIdFor } from "./bundles";
-import type { ToolResult } from "./vault-engine";
+import type { EngineHost, ToolResult } from "./engine-host.js";
 
 /** The engine's bundle directory (src/engine/runtime.ts); not imported, since that module loads the Wasm. */
 const BUNDLE_DIR = "/vault/knowledge";
@@ -30,14 +30,12 @@ const BUNDLE_ARG = z
 
 const denied = (text: string): ToolResult => ({ isError: true, content: [{ type: "text", text: `Access denied: ${text}` }] });
 
-type EngineStub = { callTool(name: string, args: Record<string, unknown>, actor: string, vaultId: string): Promise<ToolResult> };
-
 /**
  * One tool call for an OIDC caller: the bundle comes from the call's `bundle` argument, else the
  * request's `?bundle=`, else the token's only bundle; the token's grant for it decides the access.
  */
 export async function bundleCall(
-  env: Env,
+  host: EngineHost,
   tool: string,
   args: Record<string, unknown>,
   policy: Policy,
@@ -51,8 +49,7 @@ export async function bundleCall(
   if (!access) return denied(`this connection may not use the bundle "${bundle}".`);
   if (access === "read" && !READ_TOOLS.has(tool)) return denied(`${tool} changes the bundle "${bundle}", and this connection may only read it.`);
   const vaultId = await vaultIdFor(bundle);
-  const stub = env.VAULT_ENGINE.getByName(vaultId) as unknown as EngineStub;
-  const engine: Engine = { callTool: (name, a, actor) => stub.callTool(name, a, actor, vaultId) };
+  const engine: Engine = { callTool: (name, a, actor) => host.callTool(name, a, actor, vaultId) };
   const result = await guardedCall(engine, tool, rest, { ...policy, access: access === "write" ? "full" : "read" });
   return nameBundle(result, bundle);
 }
@@ -69,7 +66,7 @@ export function nameBundle(result: ToolResult, bundle: string): ToolResult {
 }
 
 /** One server per request (stateless); tools are limited to the grant's access and every call is guarded. */
-function createServer(env: Env, policy: Policy, requestBundle: string | null): McpServer {
+function createServer(env: Env, host: EngineHost, policy: Policy, requestBundle: string | null): McpServer {
   const server = new McpServer({ name: "okf-hub", version: "1.2.0" }, { instructions: SERVER_INSTRUCTIONS });
   if (policy.bundles) {
     // Access depends on the bundle each call names, so every tool is listed and each call is checked.
@@ -77,7 +74,7 @@ function createServer(env: Env, policy: Policy, requestBundle: string | null): M
       server.registerTool(
         tool.name,
         { ...presentTool(tool.name, tool.description), inputSchema: z.object({ ...toolInputShape(tool.inputSchema), bundle: BUNDLE_ARG }) },
-        async (args: Record<string, unknown>) => bundleCall(env, tool.name, args, policy, requestBundle),
+        async (args: Record<string, unknown>) => bundleCall(host, tool.name, args, policy, requestBundle),
       );
     }
     return server;
@@ -95,7 +92,7 @@ function createServer(env: Env, policy: Policy, requestBundle: string | null): M
 }
 
 /** OAuthProvider has already authenticated the request; ctx.props is the grant's policy. */
-export async function handleMcp(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+export async function handleMcp(request: Request, env: Env, ctx: ExecutionContext, host: EngineHost): Promise<Response> {
   let policy: Policy;
   try {
     policy = policyFromProps((ctx as { props?: unknown }).props);
@@ -116,5 +113,5 @@ export async function handleMcp(request: Request, env: Env, ctx: ExecutionContex
     // Which calls each app makes (method and tool name only), for diagnosing clients.
     console.log(JSON.stringify({ mcp: rpcSummary(await request.clone().text()), app: policy.clientName, access: policy.access, bundle: requestBundle ?? undefined }));
   }
-  return createMcpHandler(() => createServer(env, policy, requestBundle), { route: "/mcp", responseMode: "json" })(request, env, ctx);
+  return createMcpHandler(() => createServer(env, host, policy, requestBundle), { route: "/mcp", responseMode: "json" })(request, env, ctx);
 }

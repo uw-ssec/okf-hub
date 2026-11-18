@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { guardedCall, type Engine } from "../src/guarded-call";
 import type { Policy } from "../src/policy";
-import type { ToolResult } from "../src/vault-engine";
+import type { ToolResult } from "../src/engine-host.js";
 
 function fakeEngine(reply: (name: string, args: Record<string, unknown>) => unknown) {
   const calls: { name: string; args: Record<string, unknown>; actor: string }[] = [];

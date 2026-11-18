@@ -1,4 +1,4 @@
-import type { ToolResult } from "./vault-engine";
+import type { ToolResult } from "./engine-host.js";
 import { SEARCH_MAX, isExcluded, linkTarget, stripExcludedLinks, type Policy } from "./policy";
 
 type SearchHit = { concept_id: string; inbound?: string[]; outbound?: string[] } & Record<string, unknown>;

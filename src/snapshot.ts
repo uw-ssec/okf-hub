@@ -6,7 +6,7 @@
  */
 import { accessFor, isBundleName, vaultIdFor } from "./bundles";
 import { oidcConfig, resolveCaller } from "./oidc";
-import type { Snapshot } from "./vault-engine";
+import type { Snapshot } from "./engine-host.js";
 
 const error = (status: number, code: string, description: string) =>
   Response.json({ error: code, error_description: description }, { status, headers: { "Cache-Control": "no-store" } });

@@ -1,4 +1,4 @@
-import type { ToolResult } from "./vault-engine";
+import type { ToolResult } from "./engine-host.js";
 import { checkInput, engineArgs, type Policy } from "./policy";
 import { filterResult } from "./policy-output";
 

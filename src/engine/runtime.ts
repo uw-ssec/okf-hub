@@ -1,6 +1,6 @@
+import { readFile } from "node:fs/promises";
 import { Volume, createFsFromVolume } from "memfs";
 import "./wasm_exec.js";
-import engineWasm from "./okf-engine.wasm";
 import { serialQueue } from "../serial";
 
 export type HubFetch = (method: string, path: string, body: Uint8Array | null) => Promise<{ status: number; body: Uint8Array }>;
@@ -38,9 +38,16 @@ export function setLoadedVault(vaultId: string): void {
   loadedVault = vaultId;
 }
 
+let exitedOverride: (() => boolean) | null = null;
+
 /** True once the Go runtime has exited; every later export call would fail. */
 export function engineExited(): boolean {
-  return exited;
+  return exitedOverride ? exitedOverride() : exited;
+}
+
+/** Test-only: make `engineExited` answer from `fn` instead of the real runtime; `null` restores it. */
+export function __setEngineExitedForTest(fn: (() => boolean) | null): void {
+  exitedOverride = fn;
 }
 
 type FsLike = Record<string, unknown> & {
@@ -98,9 +105,11 @@ export function startEngine(): Promise<void> {
     started = (async () => {
       (globalThis as Record<string, unknown>).fs = withConsoleStdio(createFsFromVolume(volume) as unknown as FsLike);
       const go = new (globalThis as unknown as { Go: new () => { importObject: WebAssembly.Imports; run(i: WebAssembly.Instance): Promise<void> } }).Go();
+      // The Wasm sits next to this module: src/engine/ under vitest, dist/engine/ once built.
+      const engineWasm = await WebAssembly.compile(await readFile(new URL("./okf-engine.wasm", import.meta.url)));
       const instance = await WebAssembly.instantiate(engineWasm, go.importObject);
       // go.run resolves only if the Go runtime exits (a fatal error recover()
-      // can't catch). Flag it so the Durable Object can restart cleanly.
+      // can't catch). Flag it so the host can restart cleanly.
       go.run(instance).then(() => { exited = true; }, () => { exited = true; });
     })();
   }

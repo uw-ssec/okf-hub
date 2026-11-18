@@ -3,18 +3,10 @@ import { routeHub } from "./hub";
 import { engineExclusive, engineExited, loadedVaultId, readBundleFiles, resetVolume, setLoadedVault, startEngine } from "./engine/runtime";
 import { KEEP_WARM_INTERVAL_MS, nextKeepWarmAt } from "./keep-warm";
 import { vaultKeyFor } from "./bundles";
-
-export type ToolResult = {
-  content: { type: "text"; text: string }[];
-  isError?: boolean;
-  structuredContent?: unknown;
-};
+import type { Snapshot, ToolResult } from "./engine-host.js";
 
 const MUTATING = new Set(["okf_create", "okf_update", "okf_relate"]);
 const BLOB_CACHE_MAX_BYTES = 48 * 1024 * 1024; // stay well inside the 128 MB isolate limit
-
-/** A bundle's files as the console and other readers see them: text by path, with a content hash as version. */
-export type Snapshot = { head: string; files: Record<string, { content: string; version: string }> };
 
 /**
  * One per vault. Holds the decrypted vault in memory and runs okf's MCP

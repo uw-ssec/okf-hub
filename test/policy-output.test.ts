@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { filterResult, requestedLimit } from "../src/policy-output";
 import type { Policy } from "../src/policy";
-import type { ToolResult } from "../src/vault-engine";
+import type { ToolResult } from "../src/engine-host.js";
 
 const hidePeople: Policy = { clientName: "Agent", access: "full", exclude: ["people/"] };
 const result = (data: unknown, structured: unknown = data): ToolResult => ({
