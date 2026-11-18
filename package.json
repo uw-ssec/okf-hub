@@ -1,6 +1,7 @@
 {
   "name": "okf-hub",
   "private": true,
+  "license": "BSD-3-Clause",
   "type": "module",
   "scripts": {
     "build": "tsc -p . && mkdir -p dist/engine && cp src/engine/okf-engine.wasm src/engine/wasm_exec.js dist/engine/",
